@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="JD ENTERPRISES CMS Monitor — Vehicle Fleet, Insurance & PUC Expiry Management System. Manage individual vehicle insurance & PUC dates, RC uploads with live previews, and Supabase cloud sync.">
+    <title>JD ENTERPRISES CMS Monitor — Insurance & Vehicle Fleet Manager</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <!-- Main Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+    <!-- Supabase JS SDK v2 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div class="app-wrapper">
+        <!-- Top Navigation Header -->
+        <header class="navbar">
+            <div class="nav-brand">
+                <div class="brand-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                </div>
+                <div>
+                    <h1 class="brand-title">JD ENTERPRISES CMS Monitor</h1>
+                    <p class="brand-subtitle">Customer KYC · Aadhaar · PAN · Multi-Vehicle RC · Vehicle-Wise Insurance & PUC</p>
+                </div>
+            </div>
+
+            <div class="nav-controls">
+                <div id="cloud-pill" class="status-pill status-pill-offline" title="Connection status">
+                    <span class="pill-dot"></span>
+                    <span id="cloud-pill-label">Local Storage</span>
+                </div>
+
+                <button id="btn-open-settings" class="btn btn-secondary btn-compact" title="Configure Supabase Database">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>
+                    <span>Supabase Config</span>
+                </button>
+
+                <button id="btn-theme-toggle" class="btn-icon" title="Toggle Theme" aria-label="Toggle Theme">
+                    <svg id="icon-moon" xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+                    <svg id="icon-sun" xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Real-Time Analytics Bar / KPI Cards -->
+        <section class="analytics-grid" aria-label="Key Performance Indicators">
+            <div class="kpi-card kpi-card-blue">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Total Customers</span>
+                    <span class="kpi-value" id="kpi-total-customers">0</span>
+                </div>
+            </div>
+
+            <div class="kpi-card kpi-card-purple">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Permanent</span>
+                    <span class="kpi-value" id="kpi-permanent-customers">0</span>
+                </div>
+            </div>
+
+            <div class="kpi-card kpi-card-orange">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="m5 12 7-2 7 2"></path></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Walk-in Leads</span>
+                    <span class="kpi-value" id="kpi-lead-customers">0</span>
+                </div>
+            </div>
+
+            <div class="kpi-card kpi-card-yellow">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Ins. Expiring ≤30d</span>
+                    <span class="kpi-value" id="kpi-ins-expiring-30">0</span>
+                </div>
+            </div>
+
+            <div class="kpi-card kpi-card-cyan">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h5l2-9 5 18 3-9h5"></path></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">PUC Expiring ≤30d</span>
+                    <span class="kpi-value" id="kpi-puc-expiring-30">0</span>
+                </div>
+            </div>
+
+            <div class="kpi-card kpi-card-red">
+                <div class="kpi-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                </div>
+                <div class="kpi-content">
+                    <span class="kpi-label">Pending Renewals</span>
+                    <span class="kpi-value" id="kpi-pending-renewals">0</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Search, Filters, and Actions Toolbar -->
+        <section class="toolbar-section">
+            <div class="search-wrapper">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="search-input" placeholder="Search by customer, phone, PAN, policy #, or vehicle plate..." autocomplete="off">
+            </div>
+
+            <div class="filters-wrapper">
+                <!-- Filter by Customer Type -->
+                <div class="select-wrapper">
+                    <label for="filter-customer-type" class="sr-only">Filter by Customer Type</label>
+                    <select id="filter-customer-type" class="select-dropdown">
+                        <option value="all">Customer Type: All</option>
+                        <option value="permanent">⭐ Permanent</option>
+                        <option value="lead">🚶 Walk-in Lead</option>
+                    </select>
+                </div>
+
+                <!-- Vehicle Count Filter Dropdown (Manages space cleanly) -->
+                <div class="select-wrapper">
+                    <label for="filter-vehicle-count" class="sr-only">Filter by Vehicle Count</label>
+                    <select id="filter-vehicle-count" class="select-dropdown">
+                        <option value="all">Vehicle Count: All</option>
+                        <option value="1">🚗 1 Vehicle</option>
+                        <option value="2">🚗 2 Vehicles</option>
+                        <option value="3">🚗 3 Vehicles</option>
+                        <option value="4">🚗 4 Vehicles</option>
+                        <option value="5+">🚛 5+ Vehicles (Fleet)</option>
+                    </select>
+                </div>
+
+                <!-- Calendar-Wise Expiry Filter Dropdown (30d before Insurance & 30d before PUC) -->
+                <div class="select-wrapper">
+                    <label for="filter-expiry-warning" class="sr-only">Calendar-Wise Expiry Filter</label>
+                    <select id="filter-expiry-warning" class="select-dropdown select-dropdown-highlight">
+                        <option value="all">📅 Calendar Expiry: All</option>
+                        <option value="ins-30">⚠️ Insurance Expiring in ≤30 Days</option>
+                        <option value="puc-30">⚠️ Pollution (PUC) Expiring in ≤30 Days</option>
+                        <option value="ins-expired">🔴 Expired Insurance Policies</option>
+                        <option value="puc-expired">🔴 Expired PUC Certificates</option>
+                        <option value="this-month">🗓️ Expiring This Month</option>
+                        <option value="next-month">🗓️ Expiring Next Month</option>
+                    </select>
+                </div>
+
+                <!-- Filter by Renewal Action Status -->
+                <div class="select-wrapper">
+                    <label for="filter-renewal-status" class="sr-only">Filter by Renewal Status</label>
+                    <select id="filter-renewal-status" class="select-dropdown">
+                        <option value="all">Renewal Status: All</option>
+                        <option value="pending">⏳ Pending</option>
+                        <option value="completed">✅ Completed</option>
+                        <option value="not_done">❌ Not Done</option>
+                    </select>
+                </div>
+
+                <!-- Add Customer Button -->
+                <button id="btn-add-customer" class="btn btn-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>Add Customer & Fleet</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Main Data Table Container -->
+        <main class="table-container">
+            <table class="data-table" id="customers-table">
+                <thead>
+                    <tr>
+                        <th>Customer</th>
+                        <th>Phone & KYC</th>
+                        <th>Documents Attached</th>
+                        <th>Type</th>
+                        <th>Vehicles (Plate, Ins. & PUC Expiry)</th>
+                        <th>Primary Insurance</th>
+                        <th>Renewal Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="table-body">
+                    <!-- Dynamic Rows Rendered by app.js -->
+                </tbody>
+            </table>
+
+            <!-- Empty State Display -->
+            <div id="empty-state" class="empty-state" style="display: none;">
+                <div class="empty-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect width="18" height="18" x="3" y="3" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+                </div>
+                <h3>No Customer Records Found</h3>
+                <p>Add your first customer to track multiple vehicles, individual insurance & PUC dates, RC attachments, Aadhaar, and PAN.</p>
+                <button class="btn btn-primary" onclick="document.getElementById('btn-add-customer').click()">
+                    + Add New Customer Record
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- ADD / EDIT CUSTOMER & MULTI-VEHICLE MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-customer" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-form-title">
+        <div class="modal-card modal-lg">
+            <div class="modal-header">
+                <div>
+                    <h2 id="modal-form-title" class="modal-title">Add Customer & Vehicle Fleet</h2>
+                    <p class="modal-description">Customer identity, Aadhaar, PAN, individual vehicle insurance & PUC dates, and dynamic RC uploads.</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close modal">&times;</button>
+            </div>
+
+            <form id="customer-form" class="modal-form" novalidate>
+                <input type="hidden" id="form-customer-id">
+
+                <!-- Section 1: Customer KYC (Identity, Aadhaar & PAN with Uploads) -->
+                <div class="form-section-title">
+                    <span class="step-num">1</span>
+                    <span>Customer Identity & KYC (Aadhaar & PAN)</span>
+                </div>
+
+                <div class="form-grid grid-3">
+                    <div class="form-group">
+                        <label for="input-full-name">Full Name <span class="required-star">*</span></label>
+                        <input type="text" id="input-full-name" placeholder="e.g. Ramesh Chandra" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-phone">Phone Number <span class="required-star">*</span></label>
+                        <input type="tel" id="input-phone" placeholder="e.g. 9876543210" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Customer Category</label>
+                        <div class="radio-chip-group">
+                            <label class="radio-chip">
+                                <input type="radio" name="customer-type" id="type-permanent" value="permanent" checked>
+                                <span>⭐ Permanent</span>
+                            </label>
+                            <label class="radio-chip">
+                                <input type="radio" name="customer-type" id="type-lead" value="lead">
+                                <span>🚶 Walk-in Lead</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Aadhaar & PAN with Upload Boxes Directly Below -->
+                <div class="doc-upload-grid" style="margin-top: 1rem;">
+                    <!-- Aadhaar Box + Upload -->
+                    <div class="doc-input-box">
+                        <div class="form-group">
+                            <label for="input-aadhar">Aadhaar Number (12 Digits)</label>
+                            <input type="text" id="input-aadhar" class="input-mono" maxlength="14" placeholder="XXXX XXXX XXXX">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 0.5rem;">
+                            <label>Upload Aadhaar Card (Image / PDF)</label>
+                            <input type="hidden" id="input-existing-aadhar-url">
+                            <div class="doc-dropzone" id="aadhar-dropzone">
+                                <input type="file" id="input-aadhar-file" accept="image/*,application/pdf" style="display:none;">
+                                <div class="dropzone-empty" id="aadhar-dropzone-empty">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <span>Upload Aadhaar File</span>
+                                </div>
+                                <div class="dropzone-preview" id="aadhar-dropzone-preview" style="display:none;">
+                                    <img src="" id="aadhar-thumb-img" class="doc-thumb-preview" alt="Aadhaar Thumbnail" style="display:none;">
+                                    <div class="doc-info-text">
+                                        <span class="doc-filename" id="aadhar-filename"></span>
+                                        <span class="doc-filesize" id="aadhar-filesize"></span>
+                                    </div>
+                                    <div class="doc-action-btns">
+                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-aadhar" title="Preview / Download Document">👁️</button>
+                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-aadhar" title="Remove Document">&times;</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PAN Box + Upload -->
+                    <div class="doc-input-box">
+                        <div class="form-group">
+                            <label for="input-pan">PAN Card Number</label>
+                            <input type="text" id="input-pan" class="input-mono input-uppercase" maxlength="10" placeholder="e.g. ABCDE1234F">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 0.5rem;">
+                            <label>Upload PAN Card (Image / PDF)</label>
+                            <input type="hidden" id="input-existing-pan-url">
+                            <div class="doc-dropzone" id="pan-dropzone">
+                                <input type="file" id="input-pan-file" accept="image/*,application/pdf" style="display:none;">
+                                <div class="dropzone-empty" id="pan-dropzone-empty">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <span>Upload PAN File</span>
+                                </div>
+                                <div class="dropzone-preview" id="pan-dropzone-preview" style="display:none;">
+                                    <img src="" id="pan-thumb-img" class="doc-thumb-preview" alt="PAN Thumbnail" style="display:none;">
+                                    <div class="doc-info-text">
+                                        <span class="doc-filename" id="pan-filename"></span>
+                                        <span class="doc-filesize" id="pan-filesize"></span>
+                                    </div>
+                                    <div class="doc-action-btns">
+                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-pan" title="Preview / Download Document">👁️</button>
+                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-pan" title="Remove Document">&times;</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Primary Insurance Policy & Overall PUC with Uploads -->
+                <div class="form-section-title" style="margin-top: 1.5rem;">
+                    <span class="step-num">2</span>
+                    <span>Primary Insurance Policy & General Documents</span>
+                </div>
+
+                <div class="doc-upload-grid">
+                    <!-- Insurance Details + Upload -->
+                    <div class="doc-input-box">
+                        <div class="form-grid grid-2">
+                            <div class="form-group">
+                                <label for="input-policy-number">Policy Number</label>
+                                <input type="text" id="input-policy-number" class="input-mono" placeholder="e.g. POL-9842104-X">
+                            </div>
+                            <div class="form-group">
+                                <label for="input-insurance-expiry">Primary Insurance Expiry</label>
+                                <input type="date" id="input-insurance-expiry">
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 0.5rem;">
+                            <label for="select-policy-status">Renewal Action Status</label>
+                            <select id="select-policy-status" class="select-dropdown">
+                                <option value="pending">⏳ Pending Renewal</option>
+                                <option value="completed">✅ Completed</option>
+                                <option value="not_done">❌ Not Done</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 0.5rem;">
+                            <label>Upload Policy Document (PDF / Image)</label>
+                            <input type="hidden" id="input-existing-insurance-url">
+                            <div class="doc-dropzone" id="insurance-dropzone">
+                                <input type="file" id="input-insurance-file" accept="image/*,application/pdf" style="display:none;">
+                                <div class="dropzone-empty" id="insurance-dropzone-empty">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <span>Upload Policy Document</span>
+                                </div>
+                                <div class="dropzone-preview" id="insurance-dropzone-preview" style="display:none;">
+                                    <img src="" id="insurance-thumb-img" class="doc-thumb-preview" alt="Insurance Thumbnail" style="display:none;">
+                                    <div class="doc-info-text">
+                                        <span class="doc-filename" id="insurance-filename"></span>
+                                        <span class="doc-filesize" id="insurance-filesize"></span>
+                                    </div>
+                                    <div class="doc-action-btns">
+                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-insurance" title="Preview / Download Document">👁️</button>
+                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-insurance" title="Remove Document">&times;</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- General PUC Details + Upload -->
+                    <div class="doc-input-box">
+                        <div class="form-group">
+                            <label for="input-customer-puc-date">General PUC Expiry Date</label>
+                            <input type="date" id="input-customer-puc-date">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 0.5rem;">
+                            <label>Upload General PUC Certificate (PDF / Image)</label>
+                            <input type="hidden" id="input-existing-puc-url">
+                            <div class="doc-dropzone" id="puc-dropzone">
+                                <input type="file" id="input-puc-file" accept="image/*,application/pdf" style="display:none;">
+                                <div class="dropzone-empty" id="puc-dropzone-empty">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <span>Upload PUC Certificate</span>
+                                </div>
+                                <div class="dropzone-preview" id="puc-dropzone-preview" style="display:none;">
+                                    <img src="" id="puc-thumb-img" class="doc-thumb-preview" alt="PUC Thumbnail" style="display:none;">
+                                    <div class="doc-info-text">
+                                        <span class="doc-filename" id="puc-filename"></span>
+                                        <span class="doc-filesize" id="puc-filesize"></span>
+                                    </div>
+                                    <div class="doc-action-btns">
+                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-puc" title="Preview / Download Document">👁️</button>
+                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-puc" title="Remove Document">&times;</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Dynamic Multi-Vehicle Fleet with Individual Insurance & PUC -->
+                <div class="form-section-title flex-between" style="margin-top: 1.5rem;">
+                    <div class="flex-align-center">
+                        <span class="step-num">3</span>
+                        <span>Vehicle Fleet & Dynamic RC / Insurance / PUC Uploads</span>
+                    </div>
+
+                    <!-- Vehicle Count Stepper Controls (+ / -) -->
+                    <div class="vehicle-counter-box">
+                        <span class="counter-label">Vehicle Count:</span>
+                        <div class="stepper-controls">
+                            <button type="button" id="btn-stepper-decrement" class="btn-stepper" aria-label="Decrease vehicle count">&minus;</button>
+                            <input type="number" id="input-vehicle-count" min="1" max="20" value="1" readonly>
+                            <button type="button" id="btn-stepper-increment" class="btn-stepper" aria-label="Increase vehicle count">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Container where Vehicle sections (1 to N) dynamically unfold -->
+                <div id="dynamic-vehicles-container" class="dynamic-vehicles-list">
+                    <!-- Rendered dynamically by app.js -->
+                </div>
+
+                <!-- Modal Footer Controls -->
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary close-modal">Cancel</button>
+                    <button type="submit" id="btn-save-customer" class="btn btn-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                        <span>Save All Data in Once</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- UNIVERSAL DOCUMENT PREVIEW & DOWNLOAD MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-doc-preview" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="preview-doc-title">
+        <div class="modal-card modal-md">
+            <div class="modal-header">
+                <div>
+                    <h2 id="preview-doc-title" class="modal-title">Document Preview</h2>
+                    <p id="preview-doc-subtitle" class="modal-description">Inspecting file attachment</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close preview">&times;</button>
+            </div>
+            <div class="preview-container" id="preview-container">
+                <!-- Image or PDF rendered here -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary close-modal">Close</button>
+                <a id="btn-download-preview-doc" class="btn btn-primary" download="document">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <span>Download File</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- SUPABASE SETTINGS MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-supabase-settings" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="supabase-title">
+        <div class="modal-card modal-sm">
+            <div class="modal-header">
+                <div>
+                    <h2 id="supabase-title" class="modal-title">Supabase Configuration</h2>
+                    <p class="modal-description">Connect your cloud PostgreSQL database and storage bucket.</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close settings">&times;</button>
+            </div>
+
+            <div class="supabase-config-body">
+                <div class="info-alert">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                    <span>Execute <code>schema.sql</code> in your Supabase SQL Editor, then paste your credentials below:</span>
+                </div>
+
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label for="cfg-supabase-url">Supabase Project URL</label>
+                    <input type="url" id="cfg-supabase-url" placeholder="https://xyzcompany.supabase.co">
+                </div>
+
+                <div class="form-group" style="margin-top: 0.75rem;">
+                    <label for="cfg-supabase-anon-key">Supabase Public Anon Key</label>
+                    <input type="password" id="cfg-supabase-anon-key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                </div>
+
+                <div id="supabase-test-feedback" class="status-feedback" style="display:none;"></div>
+
+                <div style="display:flex; gap:0.5rem; margin-top: 1rem;">
+                    <button type="button" id="btn-test-supabase" class="btn btn-secondary flex-1">
+                        ⚡ Test Connection
+                    </button>
+                    <button type="button" id="btn-save-supabase" class="btn btn-primary flex-1">
+                        Save & Connect
+                    </button>
+                </div>
+            </div>
+
+            <div class="modal-footer flex-between">
+                <button type="button" id="btn-disconnect-supabase" class="btn btn-danger-outline">Disconnect Cloud</button>
+                <button type="button" class="btn btn-secondary close-modal">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
+</html>
