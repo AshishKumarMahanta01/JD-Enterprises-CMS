@@ -1,12 +1,13 @@
 // ==============================================================================
 // app.js — JD ENTERPRISES CMS Monitor: Insurance & Vehicle Fleet Management System
-// Supabase Auth, Realtime Sync, IndexedDB Offline Engine & Dynamic Multi-Vehicle Fleet
+// Strict Authentication Gate: Unauthenticated users are locked in read-only mode.
+// Only authenticated users (Staff / Admin) can entry data, modify, delete, or import.
 // ==============================================================================
 
 // Global Application State
 let supabaseClient = null;
-let currentAuthUser = null;
-let userRole = 'admin'; // 'admin' | 'staff'
+let currentAuthUser = null; // null when unauthenticated, or user object when logged in
+let userRole = 'guest'; // 'guest' | 'staff' | 'admin'
 let customersData = [];
 let activityLogs = [];
 let backupParsedData = null;
@@ -75,7 +76,7 @@ function isValidUUID(str) {
 
 // --- IndexedDB Initializer ---
 function initIndexedDB() {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const request = indexedDB.open(IDB_CONFIG.name, IDB_CONFIG.version);
         request.onupgradeneeded = (e) => {
             const db = e.target.result;
@@ -181,20 +182,41 @@ const localStoreManager = {
     }
 };
 
-// --- Supabase Client & Auth Manager ---
+// ==============================================================================
+// 2. AUTHENTICATION STATE, GUARDS & SESSION MANAGER
+// ==============================================================================
+
+// Guard function: Returns true if user is logged in, or displays notice & opens login modal
+function isUserLoggedIn() {
+    return currentAuthUser !== null && userRole !== 'guest';
+}
+
+function requireAuth(actionDescription = 'perform this action') {
+    if (!isUserLoggedIn()) {
+        showToast(`🔒 Authentication Required: Please sign in to ${actionDescription}.`, 'warning');
+        
+        const authFeedback = document.getElementById('auth-feedback');
+        if (authFeedback) {
+            authFeedback.className = 'status-feedback badge-warning';
+            authFeedback.textContent = `🔒 Please sign in with your staff or admin account to ${actionDescription}.`;
+            authFeedback.style.display = 'block';
+        }
+        
+        openModal('modal-auth');
+        return false;
+    }
+    return true;
+}
+
+// Initializer for Supabase Client & User Auth Session
 async function initSupabase() {
     const rawUrl = localStorage.getItem('supabase_url') || '';
     const rawKey = localStorage.getItem('supabase_anon_key') || '';
     const url = rawUrl.trim().replace(/\/+$/, '');
     const key = rawKey.trim();
 
-    const pill = document.getElementById('cloud-pill');
-    const pillLabel = document.getElementById('cloud-pill-label');
-    const userPill = document.getElementById('user-profile-pill');
-    const btnNavLogin = document.getElementById('btn-nav-login');
-    const userEmailDisplay = document.getElementById('user-email-display');
-    const userAvatarInitial = document.getElementById('user-avatar-initial');
-    const userRoleBadge = document.getElementById('user-role-badge');
+    // Check if a local authenticated session was saved previously
+    const savedLocalSession = localStorage.getItem('jd_auth_session');
 
     if (url && key && window.supabase) {
         try {
@@ -206,24 +228,27 @@ async function initSupabase() {
                 }
             });
 
-            // Check current active session
-            try {
-                const { data: sessionData } = await supabaseClient.auth.getSession();
-                if (sessionData?.session?.user) {
-                    updateAuthStateUI(sessionData.session.user);
-                } else {
-                    updateCloudConnectedUI();
+            // Check Supabase active session
+            const { data: sessionData } = await supabaseClient.auth.getSession();
+            if (sessionData?.session?.user) {
+                updateAuthStateUI(sessionData.session.user);
+            } else if (savedLocalSession) {
+                try {
+                    const parsed = JSON.parse(savedLocalSession);
+                    updateAuthStateUI(parsed, parsed.role || 'staff');
+                } catch (e) {
+                    updateLoggedOutUI();
                 }
-            } catch (sessErr) {
-                updateCloudConnectedUI();
+            } else {
+                updateLoggedOutUI();
             }
 
-            // Listen for Supabase Authentication State Changes
+            // Supabase Auth State Change Listener
             supabaseClient.auth.onAuthStateChange(async (event, session) => {
                 if (session?.user) {
                     updateAuthStateUI(session.user);
-                } else {
-                    updateCloudConnectedUI();
+                } else if (!localStorage.getItem('jd_auth_session')) {
+                    updateLoggedOutUI();
                 }
                 await fetchAllData();
                 await fetchActivityLogs();
@@ -236,20 +261,43 @@ async function initSupabase() {
         }
     }
 
-    // Offline / Local Storage UI state
-    if (userPill) userPill.style.display = 'none';
-    if (btnNavLogin) btnNavLogin.style.display = 'none';
-    if (pill) {
-        pill.className = 'status-pill status-pill-offline';
-        if (pillLabel) pillLabel.textContent = 'Local Storage';
-        pill.title = 'Running on browser local storage & IndexedDB';
+    // If Supabase not configured, check local session fallback
+    if (savedLocalSession) {
+        try {
+            const parsed = JSON.parse(savedLocalSession);
+            updateAuthStateUI(parsed, parsed.role || 'admin');
+        } catch (e) {
+            updateLoggedOutUI();
+        }
+    } else {
+        updateLoggedOutUI();
     }
+
     return false;
 }
 
-function updateAuthStateUI(user) {
+// Update UI to Authenticated State
+function updateAuthStateUI(user, explicitRole = null) {
     currentAuthUser = user;
-    const email = user.email || '';
+    const email = user.email || 'operator@jdenterprises.com';
+
+    // Role assignment (Admin vs Staff)
+    if (explicitRole) {
+        userRole = explicitRole;
+    } else if (email.toLowerCase().includes('admin') || user.user_metadata?.role === 'admin') {
+        userRole = 'admin';
+    } else {
+        userRole = 'staff';
+    }
+
+    // Persist session for offline / standalone use
+    localStorage.setItem('jd_auth_session', JSON.stringify({
+        id: user.id || generateUUID(),
+        email: email,
+        role: userRole,
+        user_metadata: user.user_metadata || { full_name: user.name || email.split('@')[0] }
+    }));
+
     const pill = document.getElementById('cloud-pill');
     const pillLabel = document.getElementById('cloud-pill-label');
     const userPill = document.getElementById('user-profile-pill');
@@ -257,57 +305,70 @@ function updateAuthStateUI(user) {
     const userEmailDisplay = document.getElementById('user-email-display');
     const userAvatarInitial = document.getElementById('user-avatar-initial');
     const userRoleBadge = document.getElementById('user-role-badge');
+    const authBanner = document.getElementById('auth-banner-readonly');
 
-    // Role assignment (Admin vs Staff)
-    if (email.toLowerCase().includes('admin') || user.user_metadata?.role === 'admin') {
-        userRole = 'admin';
-        if (userRoleBadge) {
+    if (authBanner) authBanner.style.display = 'none';
+    if (userPill) userPill.style.display = 'inline-flex';
+    if (btnNavLogin) btnNavLogin.style.display = 'none';
+
+    if (userEmailDisplay) userEmailDisplay.textContent = email;
+    if (userAvatarInitial) {
+        const name = user.user_metadata?.full_name || email || 'U';
+        userAvatarInitial.textContent = name[0].toUpperCase();
+    }
+
+    if (userRoleBadge) {
+        if (userRole === 'admin') {
             userRoleBadge.textContent = '👑 Admin';
             userRoleBadge.className = 'role-badge role-badge-admin';
-        }
-    } else {
-        userRole = 'staff';
-        if (userRoleBadge) {
+        } else {
             userRoleBadge.textContent = '👤 Staff';
             userRoleBadge.className = 'role-badge role-badge-staff';
         }
     }
 
-    if (userPill) userPill.style.display = 'inline-flex';
-    if (btnNavLogin) btnNavLogin.style.display = 'none';
-    if (userEmailDisplay) userEmailDisplay.textContent = email || 'Staff';
-    if (userAvatarInitial) {
-        const name = user.user_metadata?.full_name || email || 'A';
-        userAvatarInitial.textContent = name[0].toUpperCase();
-    }
     if (pill) {
-        pill.className = 'status-pill status-pill-online';
-        if (pillLabel) pillLabel.textContent = 'Supabase Cloud';
-        pill.title = `Authenticated as ${email} (${userRole})`;
+        if (supabaseClient) {
+            pill.className = 'status-pill status-pill-online';
+            if (pillLabel) pillLabel.textContent = 'Supabase Cloud';
+            pill.title = `Authenticated as ${email} (${userRole})`;
+        } else {
+            pill.className = 'status-pill status-pill-offline';
+            if (pillLabel) pillLabel.textContent = 'Local Staff';
+            pill.title = `Local Session: ${email} (${userRole})`;
+        }
     }
 
     setupSupabaseRealtime();
+    renderDashboard();
 }
 
-function updateCloudConnectedUI() {
+// Update UI to Guest / Locked Read-Only State
+function updateLoggedOutUI() {
     currentAuthUser = null;
-    userRole = 'admin'; // default local admin when connected via anon key
+    userRole = 'guest';
+    localStorage.removeItem('jd_auth_session');
+
     const pill = document.getElementById('cloud-pill');
     const pillLabel = document.getElementById('cloud-pill-label');
     const userPill = document.getElementById('user-profile-pill');
     const btnNavLogin = document.getElementById('btn-nav-login');
+    const authBanner = document.getElementById('auth-banner-readonly');
 
+    if (authBanner) authBanner.style.display = 'flex';
     if (userPill) userPill.style.display = 'none';
     if (btnNavLogin) btnNavLogin.style.display = 'inline-flex';
+
     if (pill) {
-        pill.className = 'status-pill status-pill-online';
-        if (pillLabel) pillLabel.textContent = 'Supabase Cloud';
-        pill.title = 'Connected to Supabase PostgreSQL & Storage';
+        pill.className = 'status-pill status-pill-offline';
+        if (pillLabel) pillLabel.textContent = '🔒 Guest (Read-Only)';
+        pill.title = 'You are currently not logged in. All data entry and modifications are locked.';
     }
-    setupSupabaseRealtime();
+
+    renderDashboard();
 }
 
-// Setup Supabase Realtime for Multi-Staff Live Collaboration
+// Real-Time Multi-Staff Live Collaboration
 function setupSupabaseRealtime() {
     if (!supabaseClient || realtimeSubscription) return;
     try {
@@ -315,7 +376,7 @@ function setupSupabaseRealtime() {
             .channel('jd_cms_realtime_collaboration')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, async () => {
                 await fetchAllData();
-                showToast('🔔 Live Sync: Customer records updated by staff!', 'info');
+                showToast('🔔 Live Sync: Customer records updated!', 'info');
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, async () => {
                 await fetchAllData();
@@ -336,7 +397,7 @@ function setupSupabaseRealtime() {
     }
 }
 
-// Direct File Upload to Supabase Storage Bucket 'rc-documents'
+// File Upload to Supabase Storage Bucket 'rc-documents'
 async function uploadFileToSupabase(file, folderPrefix, identifier) {
     if (!supabaseClient || !file) return null;
     try {
@@ -368,7 +429,7 @@ async function uploadFileToSupabase(file, folderPrefix, identifier) {
 }
 
 // ==============================================================================
-// 2. DATA FETCHING & SYNCHRONIZATION (SUPABASE + LOCAL STORE)
+// 3. DATA FETCHING & SYNCHRONIZATION
 // ==============================================================================
 async function fetchAllData() {
     if (supabaseClient) {
@@ -458,10 +519,8 @@ async function fetchAllData() {
 }
 
 // ==============================================================================
-// 3. TIMEZONE-SAFE DATE CALCULATIONS & EXPIRY HELPERS
+// 4. DATE CALCULATIONS & EXPIRY HELPERS
 // ==============================================================================
-
-// Safe parser for "YYYY-MM-DD" date strings without timezone shifts
 function parseLocalDate(dateString) {
     if (!dateString) return null;
     if (typeof dateString !== 'string') dateString = String(dateString);
@@ -566,7 +625,7 @@ function formatTime(dateStr) {
 }
 
 // ==============================================================================
-// 4. REAL-TIME ANALYTICS BAR & KPI SUMMARY
+// 5. REAL-TIME ANALYTICS BAR & KPI SUMMARY
 // ==============================================================================
 function updateKPIAnalytics() {
     const totalCustomers = customersData.length;
@@ -621,11 +680,10 @@ function updateKPIAnalytics() {
 }
 
 // ==============================================================================
-// 5. SEARCH & CALENDAR-WISE / VEHICLE COUNT & DATE FILTER ENGINE
+// 6. SEARCH & FILTER ENGINE
 // ==============================================================================
 function getFilteredRecords() {
     let result = customersData.filter(c => {
-        // 1. Unified Text Search
         if (activeFilters.search) {
             const q = activeFilters.search.toLowerCase().trim();
             const name = (c.full_name || '').toLowerCase();
@@ -641,12 +699,10 @@ function getFilteredRecords() {
             }
         }
 
-        // 2. Customer Type Filter
         if (activeFilters.customerType !== 'all' && c.type !== activeFilters.customerType) {
             return false;
         }
 
-        // 3. Entry Date Filter
         if (activeFilters.entryDate !== 'all') {
             const date = c.created_at;
             if (activeFilters.entryDate === 'today' && !isToday(date)) return false;
@@ -655,7 +711,6 @@ function getFilteredRecords() {
             if (activeFilters.entryDate === 'this-month' && !isDateInCurrentMonth(date)) return false;
         }
 
-        // 4. Vehicle Count Filter
         if (activeFilters.vehicleCount !== 'all') {
             const count = (c.vehicles && c.vehicles.length) || 0;
             if (activeFilters.vehicleCount === '1' && count !== 1) return false;
@@ -665,7 +720,6 @@ function getFilteredRecords() {
             if (activeFilters.vehicleCount === '5+' && count < 5) return false;
         }
 
-        // 5. Calendar-Wise Expiry Filter
         if (activeFilters.expiryWarning !== 'all') {
             const filter = activeFilters.expiryWarning;
             const primaryInsDate = c.insurance_policy?.insurance_expiry_date;
@@ -715,7 +769,6 @@ function getFilteredRecords() {
             }
         }
 
-        // 6. Renewal Action Status Filter
         if (activeFilters.renewalStatus !== 'all') {
             const status = c.insurance_policy?.status || 'pending';
             if (status !== activeFilters.renewalStatus) return false;
@@ -724,7 +777,6 @@ function getFilteredRecords() {
         return true;
     });
 
-    // Helper: Find earliest upcoming insurance date
     function getEarliestInsDate(c) {
         const dates = [];
         if (c.insurance_policy?.insurance_expiry_date) dates.push(c.insurance_policy.insurance_expiry_date);
@@ -736,7 +788,6 @@ function getFilteredRecords() {
         return dates[0];
     }
 
-    // Helper: Find earliest upcoming PUC date
     function getEarliestPucDate(c) {
         const dates = [];
         if (c.puc_expiry_date) dates.push(c.puc_expiry_date);
@@ -748,7 +799,6 @@ function getFilteredRecords() {
         return dates[0];
     }
 
-    // Sort Records
     result.sort((a, b) => {
         if (activeFilters.sortOrder === 'newest') {
             return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
@@ -777,7 +827,6 @@ function getFilteredRecords() {
     return result;
 }
 
-// Reset all filter controls
 function resetAllFilters() {
     activeFilters = {
         search: '',
@@ -815,13 +864,14 @@ function resetAllFilters() {
 }
 
 // ==============================================================================
-// 6. MAIN TABLE RENDERING & INLINE ACTIONS (WITH S.NO & ROLE RESTRICTIONS)
+// 7. MAIN TABLE RENDERING (WITH AUTH LOCKDOWN ON ACTIONS)
 // ==============================================================================
 function renderDashboard() {
     updateKPIAnalytics();
     const filtered = getFilteredRecords();
     const tbody = document.getElementById('table-body');
     const emptyState = document.getElementById('empty-state');
+    const loggedIn = isUserLoggedIn();
 
     if (!tbody) return;
     tbody.innerHTML = '';
@@ -835,16 +885,27 @@ function renderDashboard() {
                     <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect width="18" height="18" x="3" y="3" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
                 </div>
                 <h3>No Customer Records Found</h3>
-                <p>Add your first customer to track multiple vehicles, individual insurance & PUC dates, RC attachments, Aadhaar, and PAN.</p>
-                <button class="btn btn-primary" onclick="document.getElementById('btn-add-customer').click()">
-                    + Add New Customer Record
+                <p>${loggedIn ? 'Add your first customer to track multiple vehicles, individual insurance & PUC dates, RC attachments, Aadhaar, and PAN.' : 'Please sign in to add your first customer and manage fleet records.'}</p>
+                <button class="btn btn-primary" id="btn-empty-add-action">
+                    ${loggedIn ? '+ Add New Customer Record' : '🔑 Sign In to Add Records'}
                 </button>
             `;
+
+            const btnEmptyAdd = document.getElementById('btn-empty-add-action');
+            if (btnEmptyAdd) {
+                btnEmptyAdd.onclick = () => {
+                    if (requireAuth('add customer records')) {
+                        resetCustomerForm();
+                        document.getElementById('modal-form-title').textContent = 'Add Customer & Vehicle Fleet';
+                        openModal('modal-customer');
+                    }
+                };
+            }
         }
         return;
     }
 
-    // If filters returned 0 records but data exists in database
+    // If filters returned 0 records
     if (filtered.length === 0) {
         if (emptyState) {
             emptyState.style.display = 'block';
@@ -943,21 +1004,46 @@ function renderDashboard() {
             docPillsHtml = '<span style="color:var(--text-muted); font-size:0.72rem; font-style:italic;">No KYC Files</span>';
         }
 
-        // Inline Action: Renewal Status Dropdown
+        // Inline Action: Renewal Status Dropdown (locked if not logged in)
         const currentStatus = c.insurance_policy?.status || 'pending';
+        const statusSelectHtml = loggedIn
+            ? `<select class="inline-action-select status-${currentStatus}" data-customer-id="${c.id}" aria-label="Change policy status">
+                   <option value="pending" ${currentStatus === 'pending' ? 'selected' : ''}>⏳ Pending</option>
+                   <option value="completed" ${currentStatus === 'completed' ? 'selected' : ''}>✅ Completed</option>
+                   <option value="not_done" ${currentStatus === 'not_done' ? 'selected' : ''}>❌ Not Done</option>
+               </select>`
+            : `<button type="button" class="btn-sm btn-secondary locked-status-btn" data-customer-id="${c.id}" title="Sign in to modify policy status" style="font-size:0.75rem; padding:0.25rem 0.5rem; display:inline-flex; align-items:center; gap:0.25rem;">
+                   <span>🔒 ${currentStatus === 'completed' ? '✅ Completed' : currentStatus === 'not_done' ? '❌ Not Done' : '⏳ Pending'}</span>
+               </button>`;
 
         // Staff Creator Audit Tag
         const creatorName = c.created_by_name || c.created_by_email || 'Staff';
         const createdDate = formatDate(c.created_at);
 
-        // Delete Button: Allowed only for Admin role
-        const deleteButtonHtml = userRole === 'admin'
-            ? `<button type="button" class="btn-icon btn-danger-icon btn-delete" data-id="${c.id}" title="Delete Record (Admin)" aria-label="Delete record">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+        // Edit Button (Locked to Login)
+        const editButtonHtml = loggedIn
+            ? `<button type="button" class="btn-icon btn-edit" data-id="${c.id}" title="Edit Customer & Vehicles" aria-label="Edit record">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
                </button>`
-            : `<button type="button" class="btn-icon" style="opacity:0.4; cursor:not-allowed;" title="Delete locked to Admin only" disabled>
+            : `<button type="button" class="btn-icon locked-edit-btn" data-id="${c.id}" title="🔒 Sign in to edit record" aria-label="Sign in to edit">
                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                </button>`;
+
+        // Delete Button: Allowed only for Admin role when logged in
+        let deleteButtonHtml = '';
+        if (!loggedIn) {
+            deleteButtonHtml = `<button type="button" class="btn-icon locked-delete-btn" title="🔒 Sign in required to delete" aria-label="Sign in to delete">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+               </button>`;
+        } else if (userRole === 'admin') {
+            deleteButtonHtml = `<button type="button" class="btn-icon btn-danger-icon btn-delete" data-id="${c.id}" title="Delete Record (Admin)" aria-label="Delete record">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+               </button>`;
+        } else {
+            deleteButtonHtml = `<button type="button" class="btn-icon" style="opacity:0.4; cursor:not-allowed;" title="Delete locked to Admin only" disabled>
+                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+               </button>`;
+        }
 
         tr.innerHTML = `
             <td style="text-align:center;">
@@ -991,18 +1077,10 @@ function renderDashboard() {
                     <span class="badge ${primaryInsBadge.badgeClass}">${primaryInsBadge.label}</span>
                 </div>
             </td>
-            <td>
-                <select class="inline-action-select status-${currentStatus}" data-customer-id="${c.id}" aria-label="Change policy status">
-                    <option value="pending" ${currentStatus === 'pending' ? 'selected' : ''}>⏳ Pending</option>
-                    <option value="completed" ${currentStatus === 'completed' ? 'selected' : ''}>✅ Completed</option>
-                    <option value="not_done" ${currentStatus === 'not_done' ? 'selected' : ''}>❌ Not Done</option>
-                </select>
-            </td>
+            <td>${statusSelectHtml}</td>
             <td>
                 <div class="table-actions">
-                    <button type="button" class="btn-icon btn-edit" data-id="${c.id}" title="Edit Customer & Vehicles" aria-label="Edit record">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
-                    </button>
+                    ${editButtonHtml}
                     ${deleteButtonHtml}
                 </div>
             </td>
@@ -1011,21 +1089,31 @@ function renderDashboard() {
         tbody.appendChild(tr);
     });
 
-    // Attach dynamic listeners
     attachTableDynamicEvents();
 }
 
 function attachTableDynamicEvents() {
-    // 1. Inline Status Update
+    // 1. Inline Status Update (Logged-in users)
     document.querySelectorAll('.inline-action-select').forEach(select => {
         select.addEventListener('change', async (e) => {
+            if (!requireAuth('modify policy renewal status')) {
+                renderDashboard();
+                return;
+            }
             const customerId = e.target.dataset.customerId;
             const newStatus = e.target.value;
             await updatePolicyStatus(customerId, newStatus);
         });
     });
 
-    // 2. Universal Preview from any Document Badge
+    // Locked status button trigger (Guest mode)
+    document.querySelectorAll('.locked-status-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            requireAuth('change policy renewal status');
+        });
+    });
+
+    // 2. Universal Preview from any Document Badge (Available in all modes)
     document.querySelectorAll('.preview-any-doc-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const url = e.currentTarget.dataset.docUrl;
@@ -1037,22 +1125,38 @@ function attachTableDynamicEvents() {
     // 3. Edit Buttons
     document.querySelectorAll('.btn-edit').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!requireAuth('edit customer and vehicle records')) return;
             const id = e.currentTarget.dataset.id;
             openEditCustomerModal(id);
+        });
+    });
+
+    document.querySelectorAll('.locked-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            requireAuth('edit customer and vehicle records');
         });
     });
 
     // 4. Delete Buttons
     document.querySelectorAll('.btn-delete').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!requireAuth('delete records')) return;
             const id = e.currentTarget.dataset.id;
             handleDeleteCustomer(id);
+        });
+    });
+
+    document.querySelectorAll('.locked-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            requireAuth('delete customer records');
         });
     });
 }
 
 // Inline Status Update (Supabase + Local)
 async function updatePolicyStatus(customerId, newStatus) {
+    if (!requireAuth('modify policy renewal status')) return;
+
     const customer = customersData.find(c => String(c.id) === String(customerId));
     if (!customer) return;
 
@@ -1083,7 +1187,7 @@ async function updatePolicyStatus(customerId, newStatus) {
 }
 
 // ==============================================================================
-// 7. GENERIC DROPZONE ATTACHMENT HANDLER WITH AUTO RC PLATE EXTRACTION
+// 8. GENERIC DROPZONE ATTACHMENT HANDLER WITH AUTO RC PLATE EXTRACTION
 // ==============================================================================
 function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbImgId, filenameId, filesizeId, previewBtnId, clearBtnId, stateHolder, titleLabel, autoFetchIndex = null) {
     const fileInput = document.getElementById(fileInputId);
@@ -1125,13 +1229,15 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
     }
 
     dropzone.onclick = (e) => {
+        if (!requireAuth('upload documents')) return;
         if (!e.target.closest('.doc-action-btns') && !e.target.closest('.thumbnail-actions')) {
-            fileInput.value = ''; // Reset input to re-trigger onchange if same file selected
+            fileInput.value = '';
             fileInput.click();
         }
     };
 
     fileInput.onchange = (e) => {
+        if (!requireAuth('upload documents')) return;
         const file = e.target.files[0];
         if (!file) return;
 
@@ -1167,7 +1273,6 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
                 };
             }
 
-            // Auto-fetch plate number from RC file if applicable
             if (autoFetchIndex !== null) {
                 autoDetectPlateFromRC(file, autoFetchIndex);
             }
@@ -1179,6 +1284,7 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
     if (clearBtn) {
         clearBtn.onclick = (e) => {
             e.stopPropagation();
+            if (!requireAuth('remove documents')) return;
             stateHolder.file = null;
             stateHolder.previewUrl = null;
             stateHolder.name = '';
@@ -1193,7 +1299,7 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
     }
 }
 
-// Auto & Manual RC Vehicle Number Extraction
+// Auto RC Plate Extraction
 function autoDetectPlateFromRC(file, vehicleIndex) {
     if (!file) return;
     const plateInput = document.getElementById(`input-v-plate-${vehicleIndex}`);
@@ -1229,7 +1335,7 @@ function autoDetectPlateFromRC(file, vehicleIndex) {
 }
 
 // ==============================================================================
-// 8. DYNAMIC MULTI-VEHICLE RC ENGINE (AUTO + MANUAL SUPPORT)
+// 9. DYNAMIC MULTI-VEHICLE RC ENGINE
 // ==============================================================================
 function renderDynamicVehicleInputs(count, existingVehicles = []) {
     const container = document.getElementById('dynamic-vehicles-container');
@@ -1314,7 +1420,6 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
                 </div>
             </div>
 
-            <!-- Upload Row for Vehicle RC, Vehicle Insurance, and Vehicle PUC -->
             <div class="v-uploads-grid" style="margin-top: 0.5rem;">
                 <!-- 1. Vehicle RC Upload -->
                 <div class="v-upload-box">
@@ -1398,7 +1503,7 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
 
         container.appendChild(card);
 
-        // Bind Dropzones for this Vehicle Card with autoFetchIndex
+        // Bind Dropzones for this Vehicle Card
         bindSingleDropzone(`v-rc-input-${i}`, `v-rc-dropzone-${i}`, `v-rc-empty-${i}`, `v-rc-preview-${i}`, `v-rc-thumb-${i}`, `v-rc-name-${i}`, `v-rc-size-${i}`, `v-rc-view-${i}`, `v-rc-clear-${i}`, vehicleFilesState[i].rc, `Vehicle #${i} — RC Document`, i);
         bindSingleDropzone(`v-ins-input-${i}`, `v-ins-dropzone-${i}`, `v-ins-empty-${i}`, `v-ins-preview-${i}`, `v-ins-thumb-${i}`, `v-ins-name-${i}`, `v-ins-size-${i}`, `v-ins-view-${i}`, `v-ins-clear-${i}`, vehicleFilesState[i].ins, `Vehicle #${i} — Insurance Policy`);
         bindSingleDropzone(`v-puc-input-${i}`, `v-puc-dropzone-${i}`, `v-puc-empty-${i}`, `v-puc-preview-${i}`, `v-puc-thumb-${i}`, `v-puc-name-${i}`, `v-puc-size-${i}`, `v-puc-view-${i}`, `v-puc-clear-${i}`, vehicleFilesState[i].puc, `Vehicle #${i} — PUC Certificate`);
@@ -1407,6 +1512,7 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
     // Bind manual Fetch RC buttons
     container.querySelectorAll('.btn-fetch-rc').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!requireAuth('auto-detect RC plate')) return;
             const idx = parseInt(e.currentTarget.dataset.vIdx);
             const state = vehicleFilesState[idx];
             if (state && state.rc && state.rc.file) {
@@ -1420,9 +1526,9 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
     // Bind remove vehicle buttons
     container.querySelectorAll('.btn-remove-v').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!requireAuth('modify vehicles')) return;
             const idxToRemove = parseInt(e.currentTarget.dataset.vIdx);
             
-            // Re-index remaining vehicles
             const newVehiclesList = [];
             const newFileState = {};
             let newCounter = 1;
@@ -1460,14 +1566,19 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
 }
 
 // ==============================================================================
-// 9. FULL CRUD — SAVE ALL DATA IN ONCE (WITH STAFF AUDIT LOGS)
+// 10. CRUD OPERATIONS — SAVE, EDIT, DELETE (AUTHENTICATION ENFORCED)
 // ==============================================================================
 async function handleCustomerFormSubmit(e) {
     e.preventDefault();
+
+    if (!requireAuth('save customer records')) {
+        return;
+    }
+
     const saveBtn = document.getElementById('btn-save-customer');
     if (saveBtn) {
         saveBtn.disabled = true;
-        saveBtn.innerHTML = '⏳ Uploading Files & Saving All Data in Once...';
+        saveBtn.innerHTML = '⏳ Uploading Files & Saving All Data...';
     }
 
     try {
@@ -1587,12 +1698,12 @@ async function handleCustomerFormSubmit(e) {
                 puc_expiry_date: pucExpiry,
                 puc_doc_url: uploadedPucUrl,
                 rc_document_url: uploadedRcUrl,
-                updated_by_email: currentAuthUser?.email || 'local_staff'
+                updated_by_email: currentAuthUser?.email || 'staff'
             });
         }
 
-        const staffEmail = currentAuthUser?.email || 'local_staff';
-        const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail;
+        const staffEmail = currentAuthUser?.email || 'staff@jdenterprises.com';
+        const staffName = currentAuthUser?.user_metadata?.full_name || currentAuthUser?.name || staffEmail;
 
         const customerPayload = {
             id: customerId,
@@ -1670,9 +1781,9 @@ async function handleCustomerFormSubmit(e) {
                 `${vehiclesList.length} vehicles, RC & KYC files synced`
             );
 
-            showToast('All customer KYC, fleet, and RC files saved to Supabase Cloud in once!', 'success');
+            showToast('All customer KYC, fleet, and RC files saved to Supabase Cloud!', 'success');
         } else {
-            showToast('All customer & document files saved to local storage in once!', 'info');
+            showToast('Customer & vehicle records saved locally!', 'info');
         }
 
         await localStoreManager.save(customerPayload);
@@ -1690,8 +1801,10 @@ async function handleCustomerFormSubmit(e) {
     }
 }
 
-// Delete Record Handler (Strictly Restricted to Admin Role)
+// Delete Record Handler (Restricted to Logged-in Admin Role)
 async function handleDeleteCustomer(id) {
+    if (!requireAuth('delete customer records')) return;
+
     if (userRole !== 'admin') {
         showToast('❌ Access Denied: Only Admin can delete customer records.', 'error');
         return;
@@ -1723,8 +1836,10 @@ async function handleDeleteCustomer(id) {
     }
 }
 
-// Open Edit Modal with Prepopulated Data & Attached Document Previews
+// Open Edit Modal (Authentication Enforced)
 function openEditCustomerModal(id) {
+    if (!requireAuth('edit customer and vehicle records')) return;
+
     const customer = customersData.find(c => String(c.id) === String(id));
     if (!customer) return;
 
@@ -1797,10 +1912,10 @@ function openEditCustomerModal(id) {
 }
 
 // ==============================================================================
-// 10. DATE-WISE DATA ENTRY & ACTIVITY TRACKER LOGIC
+// 11. DATE-WISE DATA ENTRY & ACTIVITY TRACKER LOGIC
 // ==============================================================================
 async function logActivity(actionType, customerName, details) {
-    const staffEmail = currentAuthUser?.email || 'local_staff';
+    const staffEmail = currentAuthUser?.email || 'staff@jdenterprises.com';
     const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail;
     const item = {
         id: generateUUID(),
@@ -1851,14 +1966,12 @@ function renderActivityTracker(filterDate = 'all') {
     if (!listEl) return;
     listEl.innerHTML = '';
 
-    // Filter logs with local date comparison
     let filteredLogs = activityLogs.filter(log => {
         if (!filterDate || filterDate === 'all') return true;
         if (filterDate === 'today') return isToday(log.created_at);
         if (filterDate === 'yesterday') return isYesterday(log.created_at);
         if (filterDate === 'this-week') return isThisWeek(log.created_at);
 
-        // Specific YYYY-MM-DD picker from user
         const d = parseLocalDate(log.created_at);
         if (!d) return false;
         const yyyy = d.getFullYear();
@@ -1868,7 +1981,6 @@ function renderActivityTracker(filterDate = 'all') {
         return logDateStr === filterDate;
     });
 
-    // Compute metrics
     let custCount = 0;
     let uploadCount = 0;
     let polCount = 0;
@@ -1967,14 +2079,14 @@ function setupActivityTrackerEvents() {
 }
 
 // ==============================================================================
-// 11. MANUAL BACKUP: EXPORT & IMPORT ENGINE (JSON & CSV EXCEL SPREADSHEET)
+// 12. MANUAL BACKUP: EXPORT & IMPORT ENGINE (AUTHENTICATION ENFORCED FOR RESTORE)
 // ==============================================================================
 function exportBackupJSON() {
     const backupObj = {
         version: "2.0",
         app_name: "JD ENTERPRISES CMS Monitor",
         exported_at: new Date().toISOString(),
-        exported_by: currentAuthUser?.email || 'local_user',
+        exported_by: currentAuthUser?.email || 'guest_user',
         total_customers: customersData.length,
         customers: customersData,
         activity_logs: activityLogs
@@ -2045,7 +2157,6 @@ function exportBackupCSV() {
     showToast('Excel/CSV Spreadsheet exported with Serial Numbers!', 'success');
 }
 
-// CSV Line Parser (handles quoted values, escaped quotes, commas)
 function parseCSV(text) {
     const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
     if (lines.length <= 1) return [];
@@ -2177,6 +2288,7 @@ function setupBackupDropzone() {
     if (!dropzone || !fileInput) return;
 
     dropzone.onclick = (e) => {
+        if (!requireAuth('import backups')) return;
         if (!e.target.closest('#btn-clear-backup-file')) {
             fileInput.value = '';
             fileInput.click();
@@ -2195,12 +2307,14 @@ function setupBackupDropzone() {
     dropzone.ondrop = (e) => {
         e.preventDefault();
         dropzone.classList.remove('drag-over');
+        if (!requireAuth('import backups')) return;
         if (e.dataTransfer.files.length > 0) {
             handleBackupFile(e.dataTransfer.files[0]);
         }
     };
 
     fileInput.onchange = (e) => {
+        if (!requireAuth('import backups')) return;
         if (e.target.files.length > 0) {
             handleBackupFile(e.target.files[0]);
         }
@@ -2230,7 +2344,6 @@ function setupBackupDropzone() {
                         throw new Error('No valid customer records found in JSON file.');
                     }
                     
-                    // Normalize records
                     backupParsedData = customers.map(c => ({
                         ...c,
                         id: (c.id && isValidUUID(c.id)) ? c.id : generateUUID(),
@@ -2299,6 +2412,8 @@ function setupBackupDropzone() {
 
     if (executeBtn) {
         executeBtn.addEventListener('click', async () => {
+            if (!requireAuth('restore and import database backup')) return;
+
             if (!backupParsedData || backupParsedData.length === 0) {
                 showToast('Please select a valid backup file first.', 'warning');
                 return;
@@ -2313,7 +2428,6 @@ function setupBackupDropzone() {
                     customersData = backupParsedData;
                     await localStoreManager.clearAll();
                 } else {
-                    // Merge mode: Add or update existing by ID
                     const existingMap = new Map(customersData.map(c => [c.id, c]));
                     backupParsedData.forEach(item => {
                         existingMap.set(item.id, item);
@@ -2321,12 +2435,10 @@ function setupBackupDropzone() {
                     customersData = Array.from(existingMap.values());
                 }
 
-                // Sync to IndexedDB
                 for (let c of customersData) {
                     await localStoreManager.save(c);
                 }
 
-                // If Supabase Connected, upsert cloud database
                 if (supabaseClient) {
                     if (mode === 'replace') {
                         try {
@@ -2453,7 +2565,7 @@ function openDocumentViewer(url, title) {
 }
 
 // ==============================================================================
-// 12. SUPABASE SETTINGS MODAL & CONNECTION TEST
+// 13. SUPABASE SETTINGS MODAL & CONNECTION TEST
 // ==============================================================================
 async function testSupabaseConnection() {
     const rawUrl = document.getElementById('cfg-supabase-url').value.trim();
@@ -2521,16 +2633,328 @@ function disconnectSupabase() {
     localStorage.removeItem('supabase_url');
     localStorage.removeItem('supabase_anon_key');
     supabaseClient = null;
-    currentAuthUser = null;
-    initSupabase();
+    updateLoggedOutUI();
     fetchAllData();
-    showToast('Disconnected from cloud. Running in local storage mode.', 'info');
+    showToast('Disconnected from cloud.', 'info');
     closeModal('modal-supabase-settings');
 }
 
 // ==============================================================================
-// 13. EVENT LISTENERS & UI HELPERS
+// 14. AUTHENTICATION HANDLERS: SIGN IN, SIGN UP, 1-CLICK QUICK LOGIN & LOGOUT
 // ==============================================================================
+function setupAuthTabsAndToggles() {
+    const tabSignIn = document.getElementById('tab-auth-signin');
+    const tabSignUp = document.getElementById('tab-auth-signup');
+    const tabQuick = document.getElementById('tab-auth-quick');
+    const tabReset = document.getElementById('tab-auth-reset');
+
+    const formSignIn = document.getElementById('form-auth-signin');
+    const formSignUp = document.getElementById('form-auth-signup');
+    const formQuick = document.getElementById('form-auth-quick');
+    const formReset = document.getElementById('form-auth-reset');
+    const authFeedback = document.getElementById('auth-feedback');
+
+    function switchAuthTab(activeTab, activeForm) {
+        [tabSignIn, tabSignUp, tabQuick, tabReset].forEach(t => t && t.classList.remove('active'));
+        [formSignIn, formSignUp, formQuick, formReset].forEach(f => f && (f.style.display = 'none'));
+        if (activeTab) activeTab.classList.add('active');
+        if (activeForm) activeForm.style.display = 'block';
+        if (authFeedback) authFeedback.style.display = 'none';
+    }
+
+    if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab(tabSignIn, formSignIn));
+    if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab(tabSignUp, formSignUp));
+    if (tabQuick) tabQuick.addEventListener('click', () => switchAuthTab(tabQuick, formQuick));
+    if (tabReset) tabReset.addEventListener('click', () => switchAuthTab(tabReset, formReset));
+
+    // Password visibility toggle buttons
+    document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetId = btn.getAttribute('data-target');
+            const targetInput = document.getElementById(targetId);
+            if (targetInput) {
+                const isPassword = targetInput.getAttribute('type') === 'password';
+                targetInput.setAttribute('type', isPassword ? 'text' : 'password');
+                btn.style.opacity = isPassword ? '1' : '0.6';
+            }
+        });
+    });
+
+    // 1-Click Quick Demo Login Handlers
+    const btnQuickAdmin = document.getElementById('btn-quick-admin');
+    if (btnQuickAdmin) {
+        btnQuickAdmin.addEventListener('click', () => {
+            handleQuickLogin('admin');
+        });
+    }
+
+    const btnQuickStaff = document.getElementById('btn-quick-staff');
+    if (btnQuickStaff) {
+        btnQuickStaff.addEventListener('click', () => {
+            handleQuickLogin('staff');
+        });
+    }
+}
+
+// 1-Click Login Helper for Admin & Staff
+function handleQuickLogin(role) {
+    const isAdm = role === 'admin';
+    const email = isAdm ? 'admin@jdenterprises.com' : 'staff@jdenterprises.com';
+    const fullName = isAdm ? 'Administrator' : 'Staff Operator';
+
+    const userObj = {
+        id: generateUUID(),
+        email: email,
+        user_metadata: { full_name: fullName, role: role }
+    };
+
+    updateAuthStateUI(userObj, role);
+    showToast(`Signed in successfully as ${fullName} (${role})`, 'success');
+
+    const feedback = document.getElementById('auth-feedback');
+    if (feedback) {
+        feedback.className = 'status-feedback badge-success';
+        feedback.textContent = `✅ Welcome, ${fullName}! You now have ${isAdm ? 'full Admin control' : 'Staff data entry & modify'} access.`;
+        feedback.style.display = 'block';
+    }
+
+    setTimeout(() => {
+        closeModal('modal-auth');
+    }, 500);
+}
+
+// Email/Password Sign In Handler
+async function handleAuthSignIn(e) {
+    e.preventDefault();
+    const email = document.getElementById('auth-signin-email').value.trim();
+    const password = document.getElementById('auth-signin-password').value;
+    const submitBtn = document.getElementById('btn-auth-signin-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    if (!email) {
+        showToast('Please enter your email address.', 'warning');
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Signing in...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        if (supabaseClient) {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({
+                email: email,
+                password: password
+            });
+
+            if (error) throw error;
+            updateAuthStateUI(data.user);
+        } else {
+            // Local authentication fallback
+            const isAdm = email.toLowerCase().includes('admin');
+            const localUser = {
+                id: generateUUID(),
+                email: email,
+                user_metadata: { full_name: email.split('@')[0], role: isAdm ? 'admin' : 'staff' }
+            };
+            updateAuthStateUI(localUser, isAdm ? 'admin' : 'staff');
+        }
+
+        if (feedback) {
+            feedback.className = 'status-feedback badge-success';
+            feedback.textContent = `✅ Welcome back, ${email}!`;
+            feedback.style.display = 'block';
+        }
+
+        showToast(`Signed in successfully as ${email}`, 'success');
+        setTimeout(() => {
+            closeModal('modal-auth');
+            document.getElementById('form-auth-signin')?.reset();
+        }, 500);
+    } catch (err) {
+        console.error('Sign In Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message || 'Invalid login credentials'}`;
+            feedback.style.display = 'block';
+        }
+        showToast(`Sign in failed: ${err.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Sign In to Dashboard</span>';
+    }
+}
+
+// Staff Account Registration Handler
+async function handleAuthSignUp(e) {
+    e.preventDefault();
+    const fullName = document.getElementById('auth-signup-fullname').value.trim();
+    const email = document.getElementById('auth-signup-email').value.trim();
+    const password = document.getElementById('auth-signup-password').value;
+    const confirmPassword = document.getElementById('auth-signup-confirm').value;
+    const submitBtn = document.getElementById('btn-auth-signup-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    if (password !== confirmPassword) {
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = '❌ Passwords do not match. Please recheck.';
+            feedback.style.display = 'block';
+        }
+        return;
+    }
+
+    if (password.length < 6) {
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = '❌ Password must be at least 6 characters.';
+            feedback.style.display = 'block';
+        }
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Creating account...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        if (supabaseClient) {
+            const { data, error } = await supabaseClient.auth.signUp({
+                email: email,
+                password: password,
+                options: {
+                    data: { full_name: fullName }
+                }
+            });
+
+            if (error) throw error;
+
+            if (data.session?.user) {
+                updateAuthStateUI(data.session.user);
+                showToast('Account registered and signed in!', 'success');
+            } else {
+                if (feedback) {
+                    feedback.className = 'status-feedback badge-success';
+                    feedback.textContent = '✅ Account created! Please check your email to confirm registration or sign in.';
+                    feedback.style.display = 'block';
+                }
+                showToast('Account registered! Check email.', 'info');
+            }
+        } else {
+            const localUser = {
+                id: generateUUID(),
+                email: email,
+                user_metadata: { full_name: fullName, role: 'staff' }
+            };
+            updateAuthStateUI(localUser, 'staff');
+            showToast('Staff account registered locally and signed in!', 'success');
+        }
+
+        setTimeout(() => {
+            closeModal('modal-auth');
+            document.getElementById('form-auth-signup')?.reset();
+        }, 800);
+    } catch (err) {
+        console.error('Sign Up Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message}`;
+            feedback.style.display = 'block';
+        }
+        showToast(`Registration error: ${err.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Register Staff Account</span>';
+    }
+}
+
+// Password Reset Request Handler
+async function handleAuthResetPassword(e) {
+    e.preventDefault();
+    const email = document.getElementById('auth-reset-email').value.trim();
+    const submitBtn = document.getElementById('btn-auth-reset-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    if (!email) {
+        showToast('Please enter your registered email.', 'warning');
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Sending reset link...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        if (supabaseClient) {
+            const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+                redirectTo: window.location.href
+            });
+            if (error) throw error;
+        }
+
+        if (feedback) {
+            feedback.className = 'status-feedback badge-success';
+            feedback.textContent = `✅ Password recovery link sent to ${email}. Please check your inbox.`;
+            feedback.style.display = 'block';
+        }
+        showToast('Password reset link sent!', 'info');
+    } catch (err) {
+        console.error('Password Reset Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message}`;
+            feedback.style.display = 'block';
+        }
+        showToast(`Password reset error: ${err.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Send Password Reset Link</span>';
+    }
+}
+
+// Sign Out Handler
+async function handleAuthSignOut() {
+    try {
+        if (supabaseClient) {
+            await supabaseClient.auth.signOut();
+        }
+    } catch (err) {
+        console.warn('Supabase signout warning:', err);
+    }
+    
+    updateLoggedOutUI();
+    showToast('Signed out. The application is now in locked read-only mode.', 'info');
+}
+
+// ==============================================================================
+// 15. FORM RESET & EVENT LISTENERS
+// ==============================================================================
+function resetCustomerForm() {
+    const form = document.getElementById('customer-form');
+    if (form) form.reset();
+    document.getElementById('form-customer-id').value = '';
+    document.getElementById('input-existing-aadhar-url').value = '';
+    document.getElementById('input-existing-pan-url').value = '';
+    document.getElementById('input-existing-insurance-url').value = '';
+    document.getElementById('input-existing-puc-url').value = '';
+    document.getElementById('input-customer-puc-date').value = '';
+    const permRadio = document.getElementById('type-permanent');
+    if (permRadio) permRadio.checked = true;
+
+    formAadhaarDoc = { file: null, previewUrl: null, name: '', isImage: false };
+    formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
+    formInsuranceDoc = { file: null, previewUrl: null, name: '', isImage: false };
+    formPucDoc = { file: null, previewUrl: null, name: '', isImage: false };
+    vehicleFilesState = {};
+
+    bindSingleDropzone('input-aadhar-file', 'aadhar-dropzone', 'aadhar-dropzone-empty', 'aadhar-dropzone-preview', 'aadhar-thumb-img', 'aadhar-filename', 'aadhar-filesize', 'btn-preview-aadhar', 'btn-clear-aadhar', formAadhaarDoc, 'Aadhaar Card');
+    bindSingleDropzone('input-pan-file', 'pan-dropzone', 'pan-dropzone-empty', 'pan-dropzone-preview', 'pan-thumb-img', 'pan-filename', 'pan-filesize', 'btn-preview-pan', 'btn-clear-pan', formPanDoc, 'PAN Card');
+    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, 'Insurance Policy');
+    bindSingleDropzone('input-puc-file', 'puc-dropzone', 'puc-dropzone-empty', 'puc-dropzone-preview', 'puc-thumb-img', 'puc-filename', 'puc-filesize', 'btn-preview-puc', 'btn-clear-puc', formPucDoc, 'PUC Certificate');
+
+    renderDynamicVehicleInputs(1);
+}
+
 function bindEventListeners() {
     // --- Search Input ---
     const searchInput = document.getElementById('search-input');
@@ -2623,21 +3047,31 @@ function bindEventListeners() {
         });
     }
 
-    // --- Import Modal Trigger ---
+    // --- Import Modal Trigger (Authentication Enforced) ---
     const btnOpenImport = document.getElementById('btn-open-import');
     if (btnOpenImport) {
         btnOpenImport.addEventListener('click', () => {
+            if (!requireAuth('import and restore database backups')) return;
             openModal('modal-import-backup');
         });
     }
 
-    // --- Add Customer Modal Trigger ---
+    // --- Add Customer Modal Trigger (Authentication Enforced) ---
     const btnAddCustomer = document.getElementById('btn-add-customer');
     if (btnAddCustomer) {
         btnAddCustomer.addEventListener('click', () => {
+            if (!requireAuth('add new customer records & vehicles')) return;
             resetCustomerForm();
             document.getElementById('modal-form-title').textContent = 'Add Customer & Vehicle Fleet';
             openModal('modal-customer');
+        });
+    }
+
+    // --- Banner Login Trigger ---
+    const btnBannerLogin = document.getElementById('btn-banner-login');
+    if (btnBannerLogin) {
+        btnBannerLogin.addEventListener('click', () => {
+            openModal('modal-auth');
         });
     }
 
@@ -2687,7 +3121,7 @@ function bindEventListeners() {
         });
     }
 
-    // --- Customer Form Submission ---
+    // --- Customer Form Submission (Authentication Enforced) ---
     const customerForm = document.getElementById('customer-form');
     if (customerForm) {
         customerForm.addEventListener('submit', handleCustomerFormSubmit);
@@ -2755,253 +3189,6 @@ function bindEventListeners() {
     // --- Theme Toggle ---
     const btnTheme = document.getElementById('btn-theme-toggle');
     if (btnTheme) btnTheme.addEventListener('click', toggleTheme);
-}
-
-// ==============================================================================
-// 14. SUPABASE AUTH HANDLERS & TAB MANAGEMENT
-// ==============================================================================
-function setupAuthTabsAndToggles() {
-    const tabSignIn = document.getElementById('tab-auth-signin');
-    const tabSignUp = document.getElementById('tab-auth-signup');
-    const tabReset = document.getElementById('tab-auth-reset');
-
-    const formSignIn = document.getElementById('form-auth-signin');
-    const formSignUp = document.getElementById('form-auth-signup');
-    const formReset = document.getElementById('form-auth-reset');
-    const authFeedback = document.getElementById('auth-feedback');
-
-    function switchAuthTab(activeTab, activeForm) {
-        [tabSignIn, tabSignUp, tabReset].forEach(t => t && t.classList.remove('active'));
-        [formSignIn, formSignUp, formReset].forEach(f => f && (f.style.display = 'none'));
-        if (activeTab) activeTab.classList.add('active');
-        if (activeForm) activeForm.style.display = 'block';
-        if (authFeedback) authFeedback.style.display = 'none';
-    }
-
-    if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab(tabSignIn, formSignIn));
-    if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab(tabSignUp, formSignUp));
-    if (tabReset) tabReset.addEventListener('click', () => switchAuthTab(tabReset, formReset));
-
-    // Password visibility eye buttons
-    document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const targetId = btn.getAttribute('data-target');
-            const targetInput = document.getElementById(targetId);
-            if (targetInput) {
-                const isPassword = targetInput.getAttribute('type') === 'password';
-                targetInput.setAttribute('type', isPassword ? 'text' : 'password');
-                btn.style.opacity = isPassword ? '1' : '0.6';
-            }
-        });
-    });
-}
-
-async function handleAuthSignIn(e) {
-    e.preventDefault();
-    if (!supabaseClient) {
-        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
-        openModal('modal-supabase-settings');
-        return;
-    }
-
-    const email = document.getElementById('auth-signin-email').value.trim();
-    const password = document.getElementById('auth-signin-password').value;
-    const submitBtn = document.getElementById('btn-auth-signin-submit');
-    const feedback = document.getElementById('auth-feedback');
-
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Signing in...';
-    if (feedback) feedback.style.display = 'none';
-
-    try {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
-            email: email,
-            password: password
-        });
-
-        if (error) throw error;
-
-        currentAuthUser = data.user;
-        if (feedback) {
-            feedback.className = 'status-feedback badge-success';
-            feedback.textContent = `✅ Welcome, ${data.user.email}!`;
-            feedback.style.display = 'block';
-        }
-
-        showToast(`Signed in successfully as ${data.user.email}`, 'success');
-        setTimeout(() => {
-            closeModal('modal-auth');
-            document.getElementById('form-auth-signin').reset();
-        }, 600);
-    } catch (err) {
-        console.error('Sign In Error:', err);
-        if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message || 'Invalid login credentials'}`;
-            feedback.style.display = 'block';
-        }
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Sign In to Dashboard</span>';
-    }
-}
-
-async function handleAuthSignUp(e) {
-    e.preventDefault();
-    if (!supabaseClient) {
-        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
-        openModal('modal-supabase-settings');
-        return;
-    }
-
-    const fullName = document.getElementById('auth-signup-fullname').value.trim();
-    const email = document.getElementById('auth-signup-email').value.trim();
-    const password = document.getElementById('auth-signup-password').value;
-    const confirmPassword = document.getElementById('auth-signup-confirm').value;
-    const submitBtn = document.getElementById('btn-auth-signup-submit');
-    const feedback = document.getElementById('auth-feedback');
-
-    if (password !== confirmPassword) {
-        if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = '❌ Passwords do not match. Please recheck.';
-            feedback.style.display = 'block';
-        }
-        return;
-    }
-
-    if (password.length < 6) {
-        if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = '❌ Password must be at least 6 characters.';
-            feedback.style.display = 'block';
-        }
-        return;
-    }
-
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Creating account...';
-    if (feedback) feedback.style.display = 'none';
-
-    try {
-        const { data, error } = await supabaseClient.auth.signUp({
-            email: email,
-            password: password,
-            options: {
-                data: { full_name: fullName }
-            }
-        });
-
-        if (error) throw error;
-
-        if (feedback) {
-            feedback.className = 'status-feedback badge-success';
-            if (data.session) {
-                feedback.textContent = '✅ Account created and signed in!';
-                showToast('Account registered successfully!', 'success');
-                setTimeout(() => {
-                    closeModal('modal-auth');
-                    document.getElementById('form-auth-signup').reset();
-                }, 800);
-            } else {
-                feedback.textContent = '✅ Account created! Please check your email to confirm registration or sign in.';
-                showToast('Account created! Please check your email.', 'info');
-            }
-            feedback.style.display = 'block';
-        }
-    } catch (err) {
-        console.error('Sign Up Error:', err);
-        if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message}`;
-            feedback.style.display = 'block';
-        }
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Register Staff Account</span>';
-    }
-}
-
-async function handleAuthResetPassword(e) {
-    e.preventDefault();
-    if (!supabaseClient) {
-        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
-        openModal('modal-supabase-settings');
-        return;
-    }
-
-    const email = document.getElementById('auth-reset-email').value.trim();
-    const submitBtn = document.getElementById('btn-auth-reset-submit');
-    const feedback = document.getElementById('auth-feedback');
-
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Sending reset link...';
-    if (feedback) feedback.style.display = 'none';
-
-    try {
-        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
-            redirectTo: window.location.href
-        });
-
-        if (error) throw error;
-
-        if (feedback) {
-            feedback.className = 'status-feedback badge-success';
-            feedback.textContent = `✅ Password recovery link sent to ${email}. Please check your inbox.`;
-            feedback.style.display = 'block';
-        }
-        showToast('Password reset link sent!', 'info');
-    } catch (err) {
-        console.error('Password Reset Error:', err);
-        if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message}`;
-            feedback.style.display = 'block';
-        }
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Send Password Reset Link</span>';
-    }
-}
-
-async function handleAuthSignOut() {
-    if (!supabaseClient) return;
-    try {
-        await supabaseClient.auth.signOut();
-        currentAuthUser = null;
-        userRole = 'admin'; // local fallback
-        showToast('Signed out from Supabase Cloud.', 'info');
-        await fetchAllData();
-        await fetchActivityLogs();
-    } catch (err) {
-        console.error('Sign Out Error:', err);
-    }
-}
-
-function resetCustomerForm() {
-    const form = document.getElementById('customer-form');
-    if (form) form.reset();
-    document.getElementById('form-customer-id').value = '';
-    document.getElementById('input-existing-aadhar-url').value = '';
-    document.getElementById('input-existing-pan-url').value = '';
-    document.getElementById('input-existing-insurance-url').value = '';
-    document.getElementById('input-existing-puc-url').value = '';
-    document.getElementById('input-customer-puc-date').value = '';
-    const permRadio = document.getElementById('type-permanent');
-    if (permRadio) permRadio.checked = true;
-
-    formAadhaarDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    formInsuranceDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    formPucDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    vehicleFilesState = {};
-
-    bindSingleDropzone('input-aadhar-file', 'aadhar-dropzone', 'aadhar-dropzone-empty', 'aadhar-dropzone-preview', 'aadhar-thumb-img', 'aadhar-filename', 'aadhar-filesize', 'btn-preview-aadhar', 'btn-clear-aadhar', formAadhaarDoc, 'Aadhaar Card');
-    bindSingleDropzone('input-pan-file', 'pan-dropzone', 'pan-dropzone-empty', 'pan-dropzone-preview', 'pan-thumb-img', 'pan-filename', 'pan-filesize', 'btn-preview-pan', 'btn-clear-pan', formPanDoc, 'PAN Card');
-    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, 'Insurance Policy');
-    bindSingleDropzone('input-puc-file', 'puc-dropzone', 'puc-dropzone-empty', 'puc-dropzone-preview', 'puc-thumb-img', 'puc-filename', 'puc-filesize', 'btn-preview-puc', 'btn-clear-puc', formPucDoc, 'PUC Certificate');
-
-    renderDynamicVehicleInputs(1);
 }
 
 function openModal(id) {

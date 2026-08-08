@@ -91,6 +91,22 @@
             </div>
         </header>
 
+        <!-- Guest / Unauthenticated Security Notice Banner -->
+        <div id="auth-banner-readonly" class="auth-readonly-banner">
+            <div class="auth-readonly-content">
+                <div class="auth-readonly-icon">🔒</div>
+                <div>
+                    <strong>Guest Access (Read-Only Mode)</strong>: You are currently viewing records in read-only mode. Sign in to add customer records, modify vehicles, update policy dates, or import backups.
+                </div>
+            </div>
+            <div class="auth-readonly-actions">
+                <button type="button" id="btn-banner-login" class="btn btn-primary btn-compact">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+                    <span>Sign In to Edit</span>
+                </button>
+            </div>
+        </div>
+
         <!-- Real-Time Analytics Bar / KPI Cards -->
         <section class="analytics-grid" aria-label="Key Performance Indicators">
             <div class="kpi-card kpi-card-blue">
@@ -555,6 +571,7 @@
                 <div class="auth-tabs" role="tablist">
                     <button type="button" id="tab-auth-signin" class="auth-tab-btn active" role="tab" aria-selected="true">Sign In</button>
                     <button type="button" id="tab-auth-signup" class="auth-tab-btn" role="tab" aria-selected="false">Create Account</button>
+                    <button type="button" id="tab-auth-quick" class="auth-tab-btn" role="tab" aria-selected="false">⚡ Quick Login</button>
                     <button type="button" id="tab-auth-reset" class="auth-tab-btn" role="tab" aria-selected="false">Forgot Password</button>
                 </div>
 
@@ -611,7 +628,24 @@
                     </button>
                 </form>
 
-                <!-- 3. FORGOT PASSWORD / RECOVERY FORM -->
+                <!-- 3. QUICK 1-CLICK LOGIN FORM -->
+                <div id="form-auth-quick" style="display: none;">
+                    <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                        Instant 1-Click Access for staff operators and system administrators:
+                    </p>
+                    <div class="quick-login-grid">
+                        <button type="button" id="btn-quick-admin" class="btn-quick-login">
+                            <span class="btn-quick-login-title">👑 Admin Login</span>
+                            <span class="btn-quick-login-desc">Full access: Add, edit, delete & backup</span>
+                        </button>
+                        <button type="button" id="btn-quick-staff" class="btn-quick-login">
+                            <span class="btn-quick-login-title">👤 Staff Login</span>
+                            <span class="btn-quick-login-desc">Entry & modify: Add, edit & upload RC</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 4. FORGOT PASSWORD / RECOVERY FORM -->
                 <form id="form-auth-reset" style="display: none;">
                     <div class="form-group">
                         <label for="auth-reset-email">Your Registered Email</label>
@@ -630,12 +664,12 @@
 
                 <div class="auth-notice-card">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                    <span>Row Level Security (RLS) protects all customer and vehicle documents on Supabase Cloud.</span>
+                    <span>Authentication is required to add, edit, or delete customer KYC & fleet records.</span>
                 </div>
             </div>
 
             <div class="modal-footer flex-between">
-                <span style="font-size:0.75rem; color:var(--text-muted);">Protected by Supabase Auth</span>
+                <span style="font-size:0.75rem; color:var(--text-muted);">Protected Session Portal</span>
                 <button type="button" class="btn btn-secondary close-modal">Close</button>
             </div>
         </div>
