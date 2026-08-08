@@ -1,0 +1,21 @@
+{
+  "name": "jd-enterprises-cms",
+  "version": "2.0.0",
+  "description": "JD ENTERPRISES CMS Monitor - Insurance & Vehicle Fleet Management System",
+  "main": "app.js",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1"
+  },
+  "keywords": [
+    "fleet-management",
+    "insurance",
+    "puc",
+    "supabase",
+    "cms"
+  ],
+  "author": "Ashish Kumar Mahanta",
+  "license": "MIT"
+}
