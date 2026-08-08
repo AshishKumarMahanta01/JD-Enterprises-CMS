@@ -1,79 +1,77 @@
 # JD ENTERPRISES CMS Monitor — Insurance & Fleet Manager
 
-A modern, high-performance web application to monitor Vehicle Insurance and Pollution (PUC) expiry dates, manage customer leads, track Aadhaar & PAN details, and dynamically upload & preview multiple Vehicle RC cards with seamless **Supabase Database & Storage** integration, offline-first **IndexedDB**, and **Vercel** deployment readiness.
+A modern, high-performance web application to monitor Vehicle Insurance and Pollution (PUC) expiry dates, manage customer KYC (Aadhaar & PAN), dynamically upload & preview Vehicle RC cards with **Supabase Authentication & Row Level Security (RLS)**, **Multi-Staff Real-Time Collaboration**, **Date-Wise Data Entry Audit Tracker**, **Dual Auto/Manual RC Plate Extraction**, and **Manual JSON/Excel Backup & Restore Engine**.
 
 ---
 
-## ✨ Key Features
+## ✨ Key Features & Capabilities
 
-1. **Aadhaar & PAN Card Management**:
-   - 12-digit Aadhaar input with auto-formatting (`XXXX XXXX XXXX`) and Aadhaar card document upload with live preview & download.
-   - 10-character PAN Card input (`ABCDE1234F`) with uppercase auto-formatting and PAN document upload.
-2. **Dynamic Multi-Vehicle RC Engine**:
-   - Dynamic **Vehicle Count** selector (e.g. 1 to 20 vehicles).
-   - Form dynamically generates responsive vehicle cards for each vehicle with:
-     - Vehicle Plate Number (e.g. `OD-02-AB-1234`)
-     - Vehicle Category / Model (2-Wheeler, 4-Wheeler, Commercial, SUV, etc.)
-     - **RC Document Upload** with instant thumbnail preview, remove/replace, and full modal preview.
-     - **Insurance Expiry Date & Doc Upload** with countdown and badge alert.
-     - **PUC Expiry Date & Doc Upload** with countdown and badge alert.
-   - Quick helpers: Duplicate dates to all vehicles, Add/Remove vehicle cards dynamically.
-3. **Universal Document Previewer**:
-   - Inspect Aadhaar, PAN, and any vehicle's RC, Insurance, or PUC in high definition with zoom, pan, and direct download.
-4. **Fleet View Modal**:
-   - View all vehicles, plates, and document statuses of any customer at a glance.
-5. **Supabase & Vercel Integration**:
-   - **Dual Storage Engine**: Works offline with IndexedDB and seamlessly syncs with Supabase PostgreSQL and Supabase Storage (`vehicle-docs`).
-   - In-app **Supabase Settings Modal** to configure Project URL & Anon Key with one-click connection test.
-   - `supabase_schema.sql` script with `customers` and `vehicles` tables, storage bucket, and RLS policies.
-   - Ready for Vercel deployment with `vercel.json` and serverless API endpoints in `/api/records.js`.
-6. **Data Export / Backup**:
-   - One-click CSV (Excel compatible) & JSON backup/restore supporting multi-vehicle data and documents.
-7. **Theme Switcher**:
-   - Sleek Dark / Light theme with smooth transitions and persistent preference.
+1. **🔐 Supabase Authentication & Role-Based Access Control (Admin vs. Staff)**:
+   - Built-in secure portal with **Sign In**, **Create Account**, **Password Reset**, and **Logout**.
+   - **Role Separation**:
+     - 👑 **Admin**: Full control to create, update, export/import, inspect staff audit logs, and **delete** customer records.
+     - 👤 **Staff**: Can create, update, upload RC/KYC documents, and edit policies. Delete button is strictly locked to prevent accidental data loss.
+   - Strict Row Level Security (RLS) on PostgreSQL tables (`customers`, `vehicles`, `insurance_policies`, `activity_logs`) and Storage bucket (`rc-documents`).
+
+2. **⚡ Real-Time Multi-Staff Live Collaboration**:
+   - Multiple staff members can work concurrently on different laptops and mobile phones.
+   - PostgreSQL table changes automatically trigger live synchronization via Supabase Realtime without page refresh.
+
+3. **📊 Date-Wise Data Entry & Activity Tracker**:
+   - Dedicated modal (`#modal-activity-tracker`) displaying who created or modified each customer and vehicle record.
+   - Quick date filters: **Today**, **Yesterday**, **This Week**, or **Pick Specific Date**.
+   - Live metrics summary: Customers processed, Documents uploaded, and Policies renewed on the selected date.
+
+4. **🚗 Dual Auto + Manual RC Plate Extraction**:
+   - Automatically detects Indian vehicle registration plate patterns (e.g. `OD-02-AB-1234`, `DL-01-XY-5678`) from uploaded RC document filenames/metadata.
+   - Dedicated **"🔍 Auto-Fetch RC"** button on each vehicle card.
+   - Keeps the vehicle plate input **100% manually editable** at all times for manual corrections or overrides.
+
+5. **📤 Manual Backup & Restore Engine (JSON & Excel CSV)**:
+   - **Export Database**: Download full JSON database backups (`.json`) or clean Excel spreadsheets (`.csv`) with Serial Numbers (`S.No`).
+   - **Import & Restore**: Drag-and-drop or select any `.json` or `.csv` backup file with two safe restore modes:
+     - 🔄 **Merge Mode (Recommended)**: Safely adds new entries and updates matching records without deleting existing data.
+     - ⚠️ **Clean Restore Mode**: Replaces existing table records with the backup snapshot.
+
+6. **🔢 Serial Numbers (`S.No`) & Smart Sorting / Date Filters**:
+   - Sequential `# 1`, `# 2`, `# 3` column in the main dashboard table.
+   - Sort Order selector: Newest First, Oldest First, Recently Modified, Name (A-Z), Name (Z-A), Insurance Expiry Soonest, PUC Expiry Soonest.
+   - Entry Date filter: All Time, Added Today, Added Yesterday, Added This Week, Added This Month.
+
+7. **📱 Multi-Device Ready (Laptop & Mobile)**:
+   - Fully responsive layout with mobile-optimized touch controls, dark/light theme switching, and persistent IndexedDB offline fallback.
 
 ---
 
-## 🚀 Quick Setup with Supabase (2 Minutes)
+## 🚀 Quick Setup with Supabase (3 Minutes)
 
-### Step 1: Create Supabase Project & Run SQL Schema
+### Step 1: Create Supabase Project & Run SQL Migration
 1. Go to [https://supabase.com](https://supabase.com) and create a free project.
-2. Open the **SQL Editor** from the left sidebar.
-3. Copy all contents of `supabase_schema.sql` and click **Run**.
-   - This automatically creates the `customers` and `vehicles` tables, the `vehicle-docs` storage bucket, and enables RLS policies.
+2. Open the **SQL Editor** (`>_`) from the left sidebar.
+3. Copy all contents of `schema.sql` and click **Run**.
+   - This creates `customers`, `vehicles`, `insurance_policies`, and `activity_logs` tables with audit fields, sets up the `rc-documents` storage bucket, and enables Realtime sync.
 
-### Step 2: Connect in the App
-1. Open the app in your browser (`index.html`).
-2. Click the **⚡ Supabase Settings** button in the top navigation bar.
-3. Paste your **Supabase Project URL** and **Anon Public Key** (found in your Supabase Dashboard under `Project Settings` > `API`).
-4. Click **Test & Save Connection**.
-5. Your data and file uploads (RC, Aadhaar, PAN, Insurance, PUC) will now automatically sync to Supabase!
+### Step 2: Connect in the Application
+1. Open `index.html` in your browser.
+2. Click the **⚡ Supabase Config** button in the top navigation bar.
+3. Paste your **Supabase Project URL** and **Anon Public Key** (from Supabase Dashboard > `Project Settings` > `API`).
+4. Click **Save & Connect**.
 
-> **Note**: Even without Supabase credentials, the app runs 100% offline using the browser's IndexedDB engine!
-
----
-
-## ⚡ Deployment to Vercel
-
-1. Push your repository to GitHub / GitLab / Bitbucket.
-2. Go to [https://vercel.com](https://vercel.com) and click **Add New Project**.
-3. Select your repository and click **Deploy**.
-4. *(Optional)* Under **Environment Variables**, you can add:
-   - `SUPABASE_URL`: Your Supabase Project URL
-   - `SUPABASE_ANON_KEY`: Your Supabase Anon Key
-5. Your app is now live with global CDN caching and SSL!
+### Step 3: Register Staff or Admin Account
+1. Click the **"Sign In"** button in the header.
+2. Switch to the **"Create Account"** tab and register your email (e.g. `admin@jdenterprises.com` for Admin, or any staff email).
+3. Once logged in, your user role badge (`👑 Admin` or `👤 Staff`) will appear in the top bar, and all fleet records, documents, and activity logs will synchronize in real-time.
 
 ---
 
 ## 📂 File Architecture
 
 ```
-├── index.html           # Main semantic HTML structure & modals
-├── styles.css           # Modern CSS design system, vehicle cards & dropzones
-├── app.js               # Core app logic (Supabase client, dynamic form unfolding, charts)
-├── supabase_schema.sql  # Supabase SQL migration script
+├── index.html           # Main UI, Activity Tracker modal, Backup Import modal, Auth modal
+├── style.css            # Design system, S.No pills, role badges, audit tags, backup dropzone
+├── app.js               # Core logic: Supabase Auth, Realtime sync, RC plate parser, Export/Import
+├── schema.sql           # Complete Supabase PostgreSQL schema with RLS, audit trail & Realtime
 ├── vercel.json          # Vercel deployment configuration
-├── api/
-│   └── records.js       # Vercel Serverless Function
 └── README.md            # Documentation
 ```
+

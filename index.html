@@ -34,6 +34,51 @@
                     <span id="cloud-pill-label">Local Storage</span>
                 </div>
 
+                <!-- User Profile Session Badge (Visible when logged in) -->
+                <div id="user-profile-pill" class="user-profile-pill" style="display:none;" title="Authenticated Account">
+                    <div class="user-avatar" id="user-avatar-initial">A</div>
+                    <span class="user-email-text" id="user-email-display">admin@jd.com</span>
+                    <span id="user-role-badge" class="role-badge role-badge-admin">👑 Admin</span>
+                    <button type="button" id="btn-nav-logout" class="btn-nav-logout" title="Sign Out from Supabase">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                        <span>Logout</span>
+                    </button>
+                </div>
+
+                <!-- Login Button (Visible when logged out) -->
+                <button type="button" id="btn-nav-login" class="btn btn-nav-login btn-compact" title="Sign in with your Supabase account">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+                    <span>Sign In</span>
+                </button>
+
+                <!-- Activity Log Button -->
+                <button type="button" id="btn-open-activity" class="btn btn-secondary btn-compact" title="View Date-Wise Data Entry & Activity Tracker">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    <span>📊 Activity Log</span>
+                </button>
+
+                <!-- Export / Backup Dropdown Trigger -->
+                <div class="dropdown-action-wrap">
+                    <button type="button" id="btn-export-backup" class="btn btn-secondary btn-compact" title="Export Manual Backup (JSON / Excel CSV)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>📥 Export Backup</span>
+                    </button>
+                    <div id="export-dropdown-menu" class="dropdown-popover" style="display:none;">
+                        <button type="button" id="btn-export-json" class="dropdown-item">
+                            <span>💾 Full JSON Database Backup</span>
+                        </button>
+                        <button type="button" id="btn-export-csv" class="dropdown-item">
+                            <span>📊 Excel / CSV Spreadsheet (with S.No)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Import Backup Button -->
+                <button type="button" id="btn-open-import" class="btn btn-secondary btn-compact" title="Import / Restore Data from Backup File">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <span>📤 Import Backup</span>
+                </button>
+
                 <button id="btn-open-settings" class="btn btn-secondary btn-compact" title="Configure Supabase Database">
                     <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></svg>
                     <span>Supabase Config</span>
@@ -117,6 +162,32 @@
             </div>
 
             <div class="filters-wrapper">
+                <!-- Sort Order Filter Dropdown (Newest First, Oldest First, Expiry, Name) -->
+                <div class="select-wrapper">
+                    <label for="filter-sort-order" class="sr-only">Sort Records Order</label>
+                    <select id="filter-sort-order" class="select-dropdown">
+                        <option value="newest">🌟 Newest Added First</option>
+                        <option value="oldest">⏳ Oldest Added First</option>
+                        <option value="updated">🔄 Recently Modified</option>
+                        <option value="name-asc">🔤 Name (A &rarr; Z)</option>
+                        <option value="name-desc">🔤 Name (Z &rarr; A)</option>
+                        <option value="ins-soonest">⚠️ Insurance Expiry Soonest</option>
+                        <option value="puc-soonest">⚠️ PUC Expiry Soonest</option>
+                    </select>
+                </div>
+
+                <!-- Date-Wise Entry Filter Dropdown -->
+                <div class="select-wrapper">
+                    <label for="filter-entry-date" class="sr-only">Filter by Entry Date</label>
+                    <select id="filter-entry-date" class="select-dropdown">
+                        <option value="all">📅 Entry Date: All Time</option>
+                        <option value="today">✨ Added Today</option>
+                        <option value="yesterday">🗓️ Added Yesterday</option>
+                        <option value="this-week">📆 Added This Week</option>
+                        <option value="this-month">🗓️ Added This Month</option>
+                    </select>
+                </div>
+
                 <!-- Filter by Customer Type -->
                 <div class="select-wrapper">
                     <label for="filter-customer-type" class="sr-only">Filter by Customer Type</label>
@@ -127,7 +198,7 @@
                     </select>
                 </div>
 
-                <!-- Vehicle Count Filter Dropdown (Manages space cleanly) -->
+                <!-- Vehicle Count Filter Dropdown -->
                 <div class="select-wrapper">
                     <label for="filter-vehicle-count" class="sr-only">Filter by Vehicle Count</label>
                     <select id="filter-vehicle-count" class="select-dropdown">
@@ -140,7 +211,7 @@
                     </select>
                 </div>
 
-                <!-- Calendar-Wise Expiry Filter Dropdown (30d before Insurance & 30d before PUC) -->
+                <!-- Calendar-Wise Expiry Filter Dropdown -->
                 <div class="select-wrapper">
                     <label for="filter-expiry-warning" class="sr-only">Calendar-Wise Expiry Filter</label>
                     <select id="filter-expiry-warning" class="select-dropdown select-dropdown-highlight">
@@ -168,7 +239,7 @@
                 <!-- Add Customer Button -->
                 <button id="btn-add-customer" class="btn btn-primary">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    <span>Add Customer & Fleet</span>
+                    <span>+ Add Customer & Fleet</span>
                 </button>
             </div>
         </section>
@@ -178,7 +249,8 @@
             <table class="data-table" id="customers-table">
                 <thead>
                     <tr>
-                        <th>Customer</th>
+                        <th style="width: 55px;">S.No</th>
+                        <th>Customer & Staff Audit</th>
                         <th>Phone & KYC</th>
                         <th>Documents Attached</th>
                         <th>Type</th>
@@ -461,6 +533,233 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                     <span>Download File</span>
                 </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- SUPABASE AUTHENTICATION MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-auth" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <div class="modal-card modal-sm">
+            <div class="modal-header">
+                <div>
+                    <h2 id="auth-title" class="modal-title">🔐 Secure Staff Portal</h2>
+                    <p class="modal-description" id="auth-subtitle">Sign in to access and manage live customer KYC & fleet records.</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close authentication dialog">&times;</button>
+            </div>
+
+            <div style="padding: 1.25rem;">
+                <!-- Auth Tab Selector -->
+                <div class="auth-tabs" role="tablist">
+                    <button type="button" id="tab-auth-signin" class="auth-tab-btn active" role="tab" aria-selected="true">Sign In</button>
+                    <button type="button" id="tab-auth-signup" class="auth-tab-btn" role="tab" aria-selected="false">Create Account</button>
+                    <button type="button" id="tab-auth-reset" class="auth-tab-btn" role="tab" aria-selected="false">Forgot Password</button>
+                </div>
+
+                <!-- 1. SIGN IN FORM -->
+                <form id="form-auth-signin">
+                    <div class="form-group">
+                        <label for="auth-signin-email">Staff / Admin Email</label>
+                        <input type="email" id="auth-signin-email" placeholder="admin@jdenterprises.com" required autocomplete="username">
+                    </div>
+                    <div class="form-group" style="margin-top: 0.75rem;">
+                        <label for="auth-signin-password">Password</label>
+                        <div class="auth-input-group">
+                            <input type="password" id="auth-signin-password" placeholder="••••••••" required autocomplete="current-password">
+                            <button type="button" class="btn-toggle-pwd" data-target="auth-signin-password" title="Show / Hide Password" aria-label="Toggle password visibility">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <button type="submit" id="btn-auth-signin-submit" class="btn btn-primary" style="width: 100%; margin-top: 1.25rem; font-weight: 700;">
+                        <span>Sign In to Dashboard</span>
+                    </button>
+                </form>
+
+                <!-- 2. CREATE ACCOUNT / SIGN UP FORM -->
+                <form id="form-auth-signup" style="display: none;">
+                    <div class="form-group">
+                        <label for="auth-signup-fullname">Full Name / Operator Name</label>
+                        <input type="text" id="auth-signup-fullname" placeholder="Ashish Mahanta" required autocomplete="name">
+                    </div>
+                    <div class="form-group" style="margin-top: 0.75rem;">
+                        <label for="auth-signup-email">Email Address</label>
+                        <input type="email" id="auth-signup-email" placeholder="ashish@jdenterprises.com" required autocomplete="username">
+                    </div>
+                    <div class="form-group" style="margin-top: 0.75rem;">
+                        <label for="auth-signup-password">Password (Minimum 6 characters)</label>
+                        <div class="auth-input-group">
+                            <input type="password" id="auth-signup-password" placeholder="••••••••" minlength="6" required autocomplete="new-password">
+                            <button type="button" class="btn-toggle-pwd" data-target="auth-signup-password" title="Show / Hide Password" aria-label="Toggle password visibility">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 0.75rem;">
+                        <label for="auth-signup-confirm">Confirm Password</label>
+                        <div class="auth-input-group">
+                            <input type="password" id="auth-signup-confirm" placeholder="••••••••" minlength="6" required autocomplete="new-password">
+                            <button type="button" class="btn-toggle-pwd" data-target="auth-signup-confirm" title="Show / Hide Password" aria-label="Toggle password visibility">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <button type="submit" id="btn-auth-signup-submit" class="btn btn-primary" style="width: 100%; margin-top: 1.25rem; font-weight: 700;">
+                        <span>Register Staff Account</span>
+                    </button>
+                </form>
+
+                <!-- 3. FORGOT PASSWORD / RECOVERY FORM -->
+                <form id="form-auth-reset" style="display: none;">
+                    <div class="form-group">
+                        <label for="auth-reset-email">Your Registered Email</label>
+                        <input type="email" id="auth-reset-email" placeholder="admin@jdenterprises.com" required autocomplete="email">
+                    </div>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;">
+                        We'll send a secure password reset link directly to your inbox.
+                    </p>
+                    <button type="submit" id="btn-auth-reset-submit" class="btn btn-primary" style="width: 100%; margin-top: 1.25rem; font-weight: 700;">
+                        <span>Send Password Reset Link</span>
+                    </button>
+                </form>
+
+                <!-- Live Feedback Alerts -->
+                <div id="auth-feedback" class="status-feedback" style="display:none; margin-top: 1rem;"></div>
+
+                <div class="auth-notice-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    <span>Row Level Security (RLS) protects all customer and vehicle documents on Supabase Cloud.</span>
+                </div>
+            </div>
+
+            <div class="modal-footer flex-between">
+                <span style="font-size:0.75rem; color:var(--text-muted);">Protected by Supabase Auth</span>
+                <button type="button" class="btn btn-secondary close-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- DATE-WISE DATA ENTRY & ACTIVITY TRACKER MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-activity-tracker" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="activity-title">
+        <div class="modal-card modal-lg">
+            <div class="modal-header">
+                <div>
+                    <h2 id="activity-title" class="modal-title">📊 Date-Wise Data Entry & Activity Tracker</h2>
+                    <p class="modal-description">Audit and inspect which staff member added, uploaded, or modified records by date.</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close activity tracker">&times;</button>
+            </div>
+
+            <div style="padding: 1.25rem;">
+                <!-- Activity Date Selector Toolbar -->
+                <div class="activity-filter-toolbar">
+                    <div class="activity-date-wrap">
+                        <label for="activity-filter-date" class="activity-filter-label">Filter by Specific Date:</label>
+                        <input type="date" id="activity-filter-date" class="input-date-picker">
+                    </div>
+                    <div class="activity-quick-chips">
+                        <button type="button" class="chip-btn active" data-range="all">All Dates</button>
+                        <button type="button" class="chip-btn" data-range="today">Today</button>
+                        <button type="button" class="chip-btn" data-range="yesterday">Yesterday</button>
+                        <button type="button" class="chip-btn" data-range="this-week">This Week</button>
+                        <button type="button" id="btn-refresh-activity" class="btn btn-secondary btn-compact" title="Refresh Live Activity">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Summary Activity Metrics for Selected Date -->
+                <div class="activity-metric-grid">
+                    <div class="activity-metric-box metric-blue">
+                        <span class="metric-num" id="stat-activity-customers">0</span>
+                        <span class="metric-title">Customers Processed</span>
+                    </div>
+                    <div class="activity-metric-box metric-purple">
+                        <span class="metric-num" id="stat-activity-uploads">0</span>
+                        <span class="metric-title">RC & Documents Uploaded</span>
+                    </div>
+                    <div class="activity-metric-box metric-green">
+                        <span class="metric-num" id="stat-activity-policies">0</span>
+                        <span class="metric-title">Policies / PUC Renewed</span>
+                    </div>
+                </div>
+
+                <!-- Chronological Audit Timeline -->
+                <div class="activity-timeline-wrap">
+                    <h3 class="timeline-heading">Activity Audit Trail</h3>
+                    <div id="activity-timeline-list" class="activity-timeline-list">
+                        <!-- Dynamic Activity Cards Rendered by app.js -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer flex-between">
+                <span style="font-size:0.75rem; color:var(--text-muted);" id="activity-footer-count">Showing latest entries</span>
+                <button type="button" class="btn btn-secondary close-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- IMPORT & RESTORE BACKUP MODAL -->
+    <!-- ===================================================== -->
+    <div id="modal-import-backup" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <div class="modal-card modal-md">
+            <div class="modal-header">
+                <div>
+                    <h2 id="import-title" class="modal-title">📤 Import & Restore Backup</h2>
+                    <p class="modal-description">Restore customer KYC, vehicle fleet, and policies from a JSON or CSV backup file.</p>
+                </div>
+                <button type="button" class="btn-close close-modal" aria-label="Close import dialog">&times;</button>
+            </div>
+
+            <div style="padding: 1.25rem;">
+                <div class="backup-dropzone" id="backup-import-dropzone">
+                    <input type="file" id="input-backup-file" accept=".json,.csv" style="display:none;">
+                    <div class="dropzone-empty" id="backup-dropzone-empty">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <span style="font-weight:700; margin-top:0.35rem;">Click or Drag & Drop Backup File (.json or .csv)</span>
+                        <span style="font-size:0.75rem; color:var(--text-muted);">Supports JD Enterprises JSON Database Exports and CSV Spreadsheets</span>
+                    </div>
+                    <div class="dropzone-preview" id="backup-dropzone-preview" style="display:none;">
+                        <div class="doc-info-text">
+                            <span class="doc-filename" id="backup-filename" style="font-weight:700; font-size:0.875rem;"></span>
+                            <span class="doc-filesize" id="backup-summary-stats" style="color:var(--primary); font-weight:600;"></span>
+                        </div>
+                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-backup-file" title="Clear File">&times;</button>
+                    </div>
+                </div>
+
+                <!-- Import Mode Selection -->
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label style="font-weight:700; font-size:0.8125rem;">Select Restore Mode:</label>
+                    <div class="radio-chip-group" style="margin-top: 0.35rem;">
+                        <label class="radio-chip" title="Safely adds new records and updates matching without deleting others">
+                            <input type="radio" name="import-mode" id="import-mode-merge" value="merge" checked>
+                            <span>🔄 Merge with Current Data (Recommended)</span>
+                        </label>
+                        <label class="radio-chip" title="Replaces all records with this backup snapshot">
+                            <input type="radio" name="import-mode" id="import-mode-replace" value="replace">
+                            <span>⚠️ Clean Overwrite / Restore</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="import-status-feedback" class="status-feedback" style="display:none; margin-top: 1rem;"></div>
+
+                <button type="button" id="btn-execute-import" class="btn btn-primary" style="width: 100%; margin-top: 1.25rem; font-weight: 700;" disabled>
+                    <span>Restore & Sync Backup</span>
+                </button>
+            </div>
+
+            <div class="modal-footer flex-between">
+                <span style="font-size:0.75rem; color:var(--text-muted);">Syncs to Supabase Cloud & Local Storage</span>
+                <button type="button" class="btn btn-secondary close-modal">Cancel</button>
             </div>
         </div>
     </div>

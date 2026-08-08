@@ -1,17 +1,25 @@
 // ==============================================================================
 // app.js — JD ENTERPRISES CMS Monitor: Insurance & Vehicle Fleet Management System
-// Uses Supabase JS SDK v2 with IndexedDB Offline Fallback & All-In-One Doc Uploads
+// Supabase Auth, Realtime Sync, IndexedDB Offline Engine & Dynamic Multi-Vehicle Fleet
 // ==============================================================================
 
 // Global Application State
 let supabaseClient = null;
+let currentAuthUser = null;
+let userRole = 'admin'; // 'admin' | 'staff'
 let customersData = [];
+let activityLogs = [];
+let backupParsedData = null;
+let realtimeSubscription = null;
+
 let activeFilters = {
     search: '',
     customerType: 'all',
     vehicleCount: 'all',
     expiryWarning: 'all',
-    renewalStatus: 'all'
+    renewalStatus: 'all',
+    sortOrder: 'newest',
+    entryDate: 'all'
 };
 
 // Form In-Memory File State for Customer & General Docs
@@ -20,11 +28,10 @@ let formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
 let formInsuranceDoc = { file: null, previewUrl: null, name: '', isImage: false };
 let formPucDoc = { file: null, previewUrl: null, name: '', isImage: false };
 
-// Form In-Memory File State for Dynamic Vehicle RCs, Insurances, and PUCs:
-// { [index]: { rc: { file, previewUrl, name, isImage }, ins: { file, previewUrl, name, isImage }, puc: { file, previewUrl, name, isImage } } }
+// Form In-Memory File State for Dynamic Vehicle RCs, Insurances, and PUCs
 let vehicleFilesState = {};
 
-// Local IndexedDB Storage Configuration (Fallback)
+// Local IndexedDB Storage Configuration (Offline Fallback)
 const IDB_CONFIG = {
     name: 'JDEnterprisesDB',
     version: 2,
@@ -38,10 +45,33 @@ let localDB = null;
 document.addEventListener('DOMContentLoaded', async () => {
     initTheme();
     await initIndexedDB();
-    initSupabase();
+    await initSupabase();
     await fetchAllData();
+    await fetchActivityLogs();
     bindEventListeners();
+    setupAuthTabsAndToggles();
+    setupBackupDropzone();
+    setupActivityTrackerEvents();
 });
+
+// RFC4122 v4 UUID generator (Guarantees valid PostgreSQL UUID)
+function generateUUID() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        try {
+            return crypto.randomUUID();
+        } catch (e) {}
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function isValidUUID(str) {
+    if (!str || typeof str !== 'string') return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
 
 // --- IndexedDB Initializer ---
 function initIndexedDB() {
@@ -59,54 +89,146 @@ function initIndexedDB() {
         };
         request.onerror = (e) => {
             console.error('IndexedDB Error:', e.target.error);
-            reject(e.target.error);
+            resolve(null);
         };
     });
 }
 
 const localStoreManager = {
     async getAll() {
-        return new Promise((resolve, reject) => {
-            const tx = localDB.transaction(IDB_CONFIG.store, 'readonly');
-            const store = tx.objectStore(IDB_CONFIG.store);
-            const req = store.getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
+        return new Promise((resolve) => {
+            if (!localDB) {
+                try {
+                    const fallback = JSON.parse(localStorage.getItem('jd_local_customers') || '[]');
+                    return resolve(fallback);
+                } catch (e) {
+                    return resolve([]);
+                }
+            }
+            try {
+                const tx = localDB.transaction(IDB_CONFIG.store, 'readonly');
+                const store = tx.objectStore(IDB_CONFIG.store);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => {
+                    const fallback = JSON.parse(localStorage.getItem('jd_local_customers') || '[]');
+                    resolve(fallback);
+                };
+            } catch (e) {
+                const fallback = JSON.parse(localStorage.getItem('jd_local_customers') || '[]');
+                resolve(fallback);
+            }
         });
     },
     async save(item) {
-        return new Promise((resolve, reject) => {
-            const tx = localDB.transaction(IDB_CONFIG.store, 'readwrite');
-            const store = tx.objectStore(IDB_CONFIG.store);
-            const req = store.put(item);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+        return new Promise((resolve) => {
+            if (!localDB) {
+                try {
+                    const current = JSON.parse(localStorage.getItem('jd_local_customers') || '[]');
+                    const idx = current.findIndex(c => c.id === item.id);
+                    if (idx >= 0) current[idx] = item;
+                    else current.push(item);
+                    localStorage.setItem('jd_local_customers', JSON.stringify(current));
+                } catch (e) {}
+                return resolve(item);
+            }
+            try {
+                const tx = localDB.transaction(IDB_CONFIG.store, 'readwrite');
+                const store = tx.objectStore(IDB_CONFIG.store);
+                const req = store.put(item);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(item);
+            } catch (e) {
+                resolve(item);
+            }
         });
     },
     async delete(id) {
-        return new Promise((resolve, reject) => {
-            const tx = localDB.transaction(IDB_CONFIG.store, 'readwrite');
-            const store = tx.objectStore(IDB_CONFIG.store);
-            const req = store.delete(id);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
+        return new Promise((resolve) => {
+            if (!localDB) {
+                try {
+                    let current = JSON.parse(localStorage.getItem('jd_local_customers') || '[]');
+                    current = current.filter(c => c.id !== id);
+                    localStorage.setItem('jd_local_customers', JSON.stringify(current));
+                } catch (e) {}
+                return resolve();
+            }
+            try {
+                const tx = localDB.transaction(IDB_CONFIG.store, 'readwrite');
+                const store = tx.objectStore(IDB_CONFIG.store);
+                const req = store.delete(id);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            } catch (e) {
+                resolve();
+            }
+        });
+    },
+    async clearAll() {
+        return new Promise((resolve) => {
+            localStorage.removeItem('jd_local_customers');
+            if (!localDB) return resolve();
+            try {
+                const tx = localDB.transaction(IDB_CONFIG.store, 'readwrite');
+                const store = tx.objectStore(IDB_CONFIG.store);
+                const req = store.clear();
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            } catch (e) {
+                resolve();
+            }
         });
     }
 };
 
-// --- Supabase Client Manager ---
-function initSupabase() {
-    const url = localStorage.getItem('supabase_url');
-    const key = localStorage.getItem('supabase_anon_key');
+// --- Supabase Client & Auth Manager ---
+async function initSupabase() {
+    const rawUrl = localStorage.getItem('supabase_url') || '';
+    const rawKey = localStorage.getItem('supabase_anon_key') || '';
+    const url = rawUrl.trim().replace(/\/+$/, '');
+    const key = rawKey.trim();
+
     const pill = document.getElementById('cloud-pill');
     const pillLabel = document.getElementById('cloud-pill-label');
+    const userPill = document.getElementById('user-profile-pill');
+    const btnNavLogin = document.getElementById('btn-nav-login');
+    const userEmailDisplay = document.getElementById('user-email-display');
+    const userAvatarInitial = document.getElementById('user-avatar-initial');
+    const userRoleBadge = document.getElementById('user-role-badge');
 
     if (url && key && window.supabase) {
         try {
-            supabaseClient = window.supabase.createClient(url, key);
-            pill.className = 'status-pill status-pill-online';
-            pillLabel.textContent = 'Supabase Cloud';
-            pill.title = 'Connected to Supabase PostgreSQL & Storage';
+            supabaseClient = window.supabase.createClient(url, key, {
+                auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    detectSessionInUrl: true
+                }
+            });
+
+            // Check current active session
+            try {
+                const { data: sessionData } = await supabaseClient.auth.getSession();
+                if (sessionData?.session?.user) {
+                    updateAuthStateUI(sessionData.session.user);
+                } else {
+                    updateCloudConnectedUI();
+                }
+            } catch (sessErr) {
+                updateCloudConnectedUI();
+            }
+
+            // Listen for Supabase Authentication State Changes
+            supabaseClient.auth.onAuthStateChange(async (event, session) => {
+                if (session?.user) {
+                    updateAuthStateUI(session.user);
+                } else {
+                    updateCloudConnectedUI();
+                }
+                await fetchAllData();
+                await fetchActivityLogs();
+            });
+
             return true;
         } catch (err) {
             console.error('Supabase Initialization Failed:', err);
@@ -114,17 +236,111 @@ function initSupabase() {
         }
     }
 
-    pill.className = 'status-pill status-pill-offline';
-    pillLabel.textContent = 'Local Storage';
-    pill.title = 'Running on browser local storage';
+    // Offline / Local Storage UI state
+    if (userPill) userPill.style.display = 'none';
+    if (btnNavLogin) btnNavLogin.style.display = 'none';
+    if (pill) {
+        pill.className = 'status-pill status-pill-offline';
+        if (pillLabel) pillLabel.textContent = 'Local Storage';
+        pill.title = 'Running on browser local storage & IndexedDB';
+    }
     return false;
 }
 
-// Upload file directly to Supabase Storage bucket 'rc-documents'
+function updateAuthStateUI(user) {
+    currentAuthUser = user;
+    const email = user.email || '';
+    const pill = document.getElementById('cloud-pill');
+    const pillLabel = document.getElementById('cloud-pill-label');
+    const userPill = document.getElementById('user-profile-pill');
+    const btnNavLogin = document.getElementById('btn-nav-login');
+    const userEmailDisplay = document.getElementById('user-email-display');
+    const userAvatarInitial = document.getElementById('user-avatar-initial');
+    const userRoleBadge = document.getElementById('user-role-badge');
+
+    // Role assignment (Admin vs Staff)
+    if (email.toLowerCase().includes('admin') || user.user_metadata?.role === 'admin') {
+        userRole = 'admin';
+        if (userRoleBadge) {
+            userRoleBadge.textContent = '👑 Admin';
+            userRoleBadge.className = 'role-badge role-badge-admin';
+        }
+    } else {
+        userRole = 'staff';
+        if (userRoleBadge) {
+            userRoleBadge.textContent = '👤 Staff';
+            userRoleBadge.className = 'role-badge role-badge-staff';
+        }
+    }
+
+    if (userPill) userPill.style.display = 'inline-flex';
+    if (btnNavLogin) btnNavLogin.style.display = 'none';
+    if (userEmailDisplay) userEmailDisplay.textContent = email || 'Staff';
+    if (userAvatarInitial) {
+        const name = user.user_metadata?.full_name || email || 'A';
+        userAvatarInitial.textContent = name[0].toUpperCase();
+    }
+    if (pill) {
+        pill.className = 'status-pill status-pill-online';
+        if (pillLabel) pillLabel.textContent = 'Supabase Cloud';
+        pill.title = `Authenticated as ${email} (${userRole})`;
+    }
+
+    setupSupabaseRealtime();
+}
+
+function updateCloudConnectedUI() {
+    currentAuthUser = null;
+    userRole = 'admin'; // default local admin when connected via anon key
+    const pill = document.getElementById('cloud-pill');
+    const pillLabel = document.getElementById('cloud-pill-label');
+    const userPill = document.getElementById('user-profile-pill');
+    const btnNavLogin = document.getElementById('btn-nav-login');
+
+    if (userPill) userPill.style.display = 'none';
+    if (btnNavLogin) btnNavLogin.style.display = 'inline-flex';
+    if (pill) {
+        pill.className = 'status-pill status-pill-online';
+        if (pillLabel) pillLabel.textContent = 'Supabase Cloud';
+        pill.title = 'Connected to Supabase PostgreSQL & Storage';
+    }
+    setupSupabaseRealtime();
+}
+
+// Setup Supabase Realtime for Multi-Staff Live Collaboration
+function setupSupabaseRealtime() {
+    if (!supabaseClient || realtimeSubscription) return;
+    try {
+        realtimeSubscription = supabaseClient
+            .channel('jd_cms_realtime_collaboration')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, async () => {
+                await fetchAllData();
+                showToast('🔔 Live Sync: Customer records updated by staff!', 'info');
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, async () => {
+                await fetchAllData();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'insurance_policies' }, async () => {
+                await fetchAllData();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async () => {
+                await fetchActivityLogs();
+            })
+            .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log('Realtime Multi-Staff Sync: Connected');
+                }
+            });
+    } catch (err) {
+        console.warn('Realtime subscription notice:', err.message);
+    }
+}
+
+// Direct File Upload to Supabase Storage Bucket 'rc-documents'
 async function uploadFileToSupabase(file, folderPrefix, identifier) {
     if (!supabaseClient || !file) return null;
     try {
-        const fileExt = file.name.split('.').pop();
+        const fileExt = file.name.split('.').pop() || 'png';
         const cleanName = `${folderPrefix}_${identifier}_${Date.now()}.${fileExt}`;
         const filePath = `${folderPrefix}/${cleanName}`;
 
@@ -136,7 +352,7 @@ async function uploadFileToSupabase(file, folderPrefix, identifier) {
             });
 
         if (error) {
-            console.warn('Storage upload error:', error.message);
+            console.warn('Storage upload error, using local fallback:', error.message);
             return null;
         }
 
@@ -144,7 +360,7 @@ async function uploadFileToSupabase(file, folderPrefix, identifier) {
             .from('rc-documents')
             .getPublicUrl(filePath);
 
-        return publicUrlData.publicUrl;
+        return publicUrlData?.publicUrl || null;
     } catch (err) {
         console.error('Upload document failed:', err);
         return null;
@@ -152,7 +368,7 @@ async function uploadFileToSupabase(file, folderPrefix, identifier) {
 }
 
 // ==============================================================================
-// 2. DATA FETCHING & SYNCHRONIZATION (SUPABASE + LOCAL)
+// 2. DATA FETCHING & SYNCHRONIZATION (SUPABASE + LOCAL STORE)
 // ==============================================================================
 async function fetchAllData() {
     if (supabaseClient) {
@@ -168,10 +384,17 @@ async function fetchAllData() {
                     aadhar_number,
                     aadhar_doc_url,
                     puc_doc_url,
+                    puc_expiry_date,
                     type,
+                    created_by_email,
+                    created_by_name,
+                    updated_by_email,
+                    updated_by_name,
                     created_at,
+                    updated_at,
                     vehicles (
                         id,
+                        customer_id,
                         vehicle_number,
                         rc_document_url,
                         insurance_expiry_date,
@@ -181,6 +404,7 @@ async function fetchAllData() {
                     ),
                     insurance_policies (
                         id,
+                        customer_id,
                         policy_number,
                         insurance_expiry_date,
                         policy_doc_url,
@@ -193,15 +417,21 @@ async function fetchAllData() {
 
             customersData = (data || []).map(c => ({
                 id: c.id,
-                full_name: c.full_name,
-                phone: c.phone,
-                pan_number: c.pan_number,
+                full_name: c.full_name || '',
+                phone: c.phone || '',
+                pan_number: c.pan_number || '',
                 pan_doc_url: c.pan_doc_url || null,
-                aadhar_number: c.aadhar_number,
+                aadhar_number: c.aadhar_number || '',
                 aadhar_doc_url: c.aadhar_doc_url || null,
                 puc_doc_url: c.puc_doc_url || null,
+                puc_expiry_date: c.puc_expiry_date || null,
                 type: c.type || 'permanent',
+                created_by_email: c.created_by_email || '',
+                created_by_name: c.created_by_name || '',
+                updated_by_email: c.updated_by_email || '',
+                updated_by_name: c.updated_by_name || '',
                 created_at: c.created_at,
+                updated_at: c.updated_at || c.created_at,
                 vehicles: c.vehicles || [],
                 insurance_policy: (c.insurance_policies && c.insurance_policies[0]) || {
                     id: null,
@@ -228,35 +458,85 @@ async function fetchAllData() {
 }
 
 // ==============================================================================
-// 3. DATE CALCULATIONS & EXPIRY HIGHLIGHTING
+// 3. TIMEZONE-SAFE DATE CALCULATIONS & EXPIRY HELPERS
 // ==============================================================================
+
+// Safe parser for "YYYY-MM-DD" date strings without timezone shifts
+function parseLocalDate(dateString) {
+    if (!dateString) return null;
+    if (typeof dateString !== 'string') dateString = String(dateString);
+    const cleanStr = dateString.split('T')[0].trim();
+    const parts = cleanStr.split('-');
+    if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+            return new Date(year, month, day, 0, 0, 0, 0);
+        }
+    }
+    const fallback = new Date(dateString);
+    if (isNaN(fallback.getTime())) return null;
+    fallback.setHours(0, 0, 0, 0);
+    return fallback;
+}
+
 function calculateDaysRemaining(dateString) {
     if (!dateString) return null;
-    const target = new Date(dateString);
+    const target = parseLocalDate(dateString);
+    if (!target) return null;
     const today = new Date();
-    target.setHours(0, 0, 0, 0);
     today.setHours(0, 0, 0, 0);
-    const diff = target - today;
-    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+    const diff = target.getTime() - today.getTime();
+    return Math.round(diff / (1000 * 60 * 60 * 24));
 }
 
 function isDateInCurrentMonth(dateString) {
     if (!dateString) return false;
-    const d = new Date(dateString);
+    const d = parseLocalDate(dateString);
+    if (!d) return false;
     const now = new Date();
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
 }
 
 function isDateInNextMonth(dateString) {
     if (!dateString) return false;
-    const d = new Date(dateString);
+    const d = parseLocalDate(dateString);
+    if (!d) return false;
     const now = new Date();
     const nextMo = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     return d.getFullYear() === nextMo.getFullYear() && d.getMonth() === nextMo.getMonth();
 }
 
+function isToday(dateStr) {
+    if (!dateStr) return false;
+    const d = parseLocalDate(dateStr);
+    if (!d) return false;
+    const today = new Date();
+    return d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+}
+
+function isYesterday(dateStr) {
+    if (!dateStr) return false;
+    const d = parseLocalDate(dateStr);
+    if (!d) return false;
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    return d.getDate() === yest.getDate() && d.getMonth() === yest.getMonth() && d.getFullYear() === yest.getFullYear();
+}
+
+function isThisWeek(dateStr) {
+    if (!dateStr) return false;
+    const d = parseLocalDate(dateStr);
+    if (!d) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 && diffDays <= 7;
+}
+
 function getExpiryBadge(days) {
-    if (days === null || days === undefined) {
+    if (days === null || days === undefined || isNaN(days)) {
         return { label: 'No Date', badgeClass: 'badge-info', isExpiringSoon: false, isExpired: false };
     }
     if (days < 0) {
@@ -273,8 +553,16 @@ function getExpiryBadge(days) {
 
 function formatDate(dateStr) {
     if (!dateStr) return '—';
-    const d = new Date(dateStr);
+    const d = parseLocalDate(dateStr);
+    if (!d) return '—';
     return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatTime(dateStr) {
+    if (!dateStr) return 'Just now';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return 'Just now';
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
 // ==============================================================================
@@ -292,7 +580,6 @@ function updateKPIAnalytics() {
         if (c.type === 'permanent') permanentCount++;
         else leadCount++;
 
-        // 1. Insurance Expiry across primary + individual vehicles
         let hasInsExpiring = false;
         const primaryInsDays = calculateDaysRemaining(c.insurance_policy?.insurance_expiry_date);
         if (primaryInsDays !== null && primaryInsDays <= 30) hasInsExpiring = true;
@@ -303,8 +590,10 @@ function updateKPIAnalytics() {
         });
         if (hasInsExpiring) insExpiring30++;
 
-        // 2. PUC Expiry across general + individual vehicles
         let hasPucExpiring = false;
+        const custPucDays = calculateDaysRemaining(c.puc_expiry_date);
+        if (custPucDays !== null && custPucDays <= 30) hasPucExpiring = true;
+
         (c.vehicles || []).forEach(v => {
             const vPucDays = calculateDaysRemaining(v.puc_expiry_date);
             if (vPucDays !== null && vPucDays <= 30) hasPucExpiring = true;
@@ -316,30 +605,38 @@ function updateKPIAnalytics() {
         }
     });
 
-    document.getElementById('kpi-total-customers').textContent = totalCustomers;
-    document.getElementById('kpi-permanent-customers').textContent = permanentCount;
-    document.getElementById('kpi-lead-customers').textContent = leadCount;
-    document.getElementById('kpi-ins-expiring-30').textContent = insExpiring30;
-    document.getElementById('kpi-puc-expiring-30').textContent = pucExpiring30;
-    document.getElementById('kpi-pending-renewals').textContent = pendingRenewals;
+    const elTotal = document.getElementById('kpi-total-customers');
+    const elPerm = document.getElementById('kpi-permanent-customers');
+    const elLead = document.getElementById('kpi-lead-customers');
+    const elIns = document.getElementById('kpi-ins-expiring-30');
+    const elPuc = document.getElementById('kpi-puc-expiring-30');
+    const elPending = document.getElementById('kpi-pending-renewals');
+
+    if (elTotal) elTotal.textContent = totalCustomers;
+    if (elPerm) elPerm.textContent = permanentCount;
+    if (elLead) elLead.textContent = leadCount;
+    if (elIns) elIns.textContent = insExpiring30;
+    if (elPuc) elPuc.textContent = pucExpiring30;
+    if (elPending) elPending.textContent = pendingRenewals;
 }
 
 // ==============================================================================
-// 5. SEARCH & CALENDAR-WISE / VEHICLE COUNT FILTER ENGINE
+// 5. SEARCH & CALENDAR-WISE / VEHICLE COUNT & DATE FILTER ENGINE
 // ==============================================================================
 function getFilteredRecords() {
-    return customersData.filter(c => {
+    let result = customersData.filter(c => {
         // 1. Unified Text Search
         if (activeFilters.search) {
-            const q = activeFilters.search.toLowerCase();
+            const q = activeFilters.search.toLowerCase().trim();
             const name = (c.full_name || '').toLowerCase();
             const phone = (c.phone || '').toLowerCase();
             const pan = (c.pan_number || '').toLowerCase();
             const aadhar = (c.aadhar_number || '').toLowerCase();
             const policyNum = (c.insurance_policy?.policy_number || '').toLowerCase();
+            const creator = (c.created_by_name || c.created_by_email || '').toLowerCase();
             const plates = (c.vehicles || []).map(v => (v.vehicle_number || '').toLowerCase()).join(' ');
 
-            if (!name.includes(q) && !phone.includes(q) && !pan.includes(q) && !aadhar.includes(q) && !policyNum.includes(q) && !plates.includes(q)) {
+            if (!name.includes(q) && !phone.includes(q) && !pan.includes(q) && !aadhar.includes(q) && !policyNum.includes(q) && !plates.includes(q) && !creator.includes(q)) {
                 return false;
             }
         }
@@ -349,7 +646,16 @@ function getFilteredRecords() {
             return false;
         }
 
-        // 3. Vehicle Count Filter (Clean Space Management)
+        // 3. Entry Date Filter
+        if (activeFilters.entryDate !== 'all') {
+            const date = c.created_at;
+            if (activeFilters.entryDate === 'today' && !isToday(date)) return false;
+            if (activeFilters.entryDate === 'yesterday' && !isYesterday(date)) return false;
+            if (activeFilters.entryDate === 'this-week' && !isThisWeek(date)) return false;
+            if (activeFilters.entryDate === 'this-month' && !isDateInCurrentMonth(date)) return false;
+        }
+
+        // 4. Vehicle Count Filter
         if (activeFilters.vehicleCount !== 'all') {
             const count = (c.vehicles && c.vehicles.length) || 0;
             if (activeFilters.vehicleCount === '1' && count !== 1) return false;
@@ -359,13 +665,11 @@ function getFilteredRecords() {
             if (activeFilters.vehicleCount === '5+' && count < 5) return false;
         }
 
-        // 4. Calendar-Wise Expiry Filter (30d before Insurance & 30d before Pollution)
+        // 5. Calendar-Wise Expiry Filter
         if (activeFilters.expiryWarning !== 'all') {
             const filter = activeFilters.expiryWarning;
             const primaryInsDate = c.insurance_policy?.insurance_expiry_date;
-            const primaryInsDays = calculateDaysRemaining(primaryInsDate);
 
-            // Collect all insurance and PUC dates for this customer
             const allInsDates = [];
             if (primaryInsDate) allInsDates.push(primaryInsDate);
             (c.vehicles || []).forEach(v => {
@@ -373,6 +677,7 @@ function getFilteredRecords() {
             });
 
             const allPucDates = [];
+            if (c.puc_expiry_date) allPucDates.push(c.puc_expiry_date);
             (c.vehicles || []).forEach(v => {
                 if (v.puc_expiry_date) allPucDates.push(v.puc_expiry_date);
             });
@@ -380,13 +685,13 @@ function getFilteredRecords() {
             if (filter === 'ins-30') {
                 const match = allInsDates.some(d => {
                     const days = calculateDaysRemaining(d);
-                    return days !== null && days <= 30;
+                    return days !== null && days >= 0 && days <= 30;
                 });
                 if (!match) return false;
             } else if (filter === 'puc-30') {
                 const match = allPucDates.some(d => {
                     const days = calculateDaysRemaining(d);
-                    return days !== null && days <= 30;
+                    return days !== null && days >= 0 && days <= 30;
                 });
                 if (!match) return false;
             } else if (filter === 'ins-expired') {
@@ -410,7 +715,7 @@ function getFilteredRecords() {
             }
         }
 
-        // 5. Renewal Action Status Filter
+        // 6. Renewal Action Status Filter
         if (activeFilters.renewalStatus !== 'all') {
             const status = c.insurance_policy?.status || 'pending';
             if (status !== activeFilters.renewalStatus) return false;
@@ -418,10 +723,99 @@ function getFilteredRecords() {
 
         return true;
     });
+
+    // Helper: Find earliest upcoming insurance date
+    function getEarliestInsDate(c) {
+        const dates = [];
+        if (c.insurance_policy?.insurance_expiry_date) dates.push(c.insurance_policy.insurance_expiry_date);
+        (c.vehicles || []).forEach(v => {
+            if (v.insurance_expiry_date) dates.push(v.insurance_expiry_date);
+        });
+        if (dates.length === 0) return '9999-99-99';
+        dates.sort();
+        return dates[0];
+    }
+
+    // Helper: Find earliest upcoming PUC date
+    function getEarliestPucDate(c) {
+        const dates = [];
+        if (c.puc_expiry_date) dates.push(c.puc_expiry_date);
+        (c.vehicles || []).forEach(v => {
+            if (v.puc_expiry_date) dates.push(v.puc_expiry_date);
+        });
+        if (dates.length === 0) return '9999-99-99';
+        dates.sort();
+        return dates[0];
+    }
+
+    // Sort Records
+    result.sort((a, b) => {
+        if (activeFilters.sortOrder === 'newest') {
+            return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        } else if (activeFilters.sortOrder === 'oldest') {
+            return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+        } else if (activeFilters.sortOrder === 'updated') {
+            const aUp = new Date(a.updated_at || a.created_at || 0).getTime();
+            const bUp = new Date(b.updated_at || b.created_at || 0).getTime();
+            return bUp - aUp;
+        } else if (activeFilters.sortOrder === 'name-asc') {
+            return (a.full_name || '').localeCompare(b.full_name || '');
+        } else if (activeFilters.sortOrder === 'name-desc') {
+            return (b.full_name || '').localeCompare(a.full_name || '');
+        } else if (activeFilters.sortOrder === 'ins-soonest') {
+            const aDate = getEarliestInsDate(a);
+            const bDate = getEarliestInsDate(b);
+            return aDate.localeCompare(bDate);
+        } else if (activeFilters.sortOrder === 'puc-soonest') {
+            const aDate = getEarliestPucDate(a);
+            const bDate = getEarliestPucDate(b);
+            return aDate.localeCompare(bDate);
+        }
+        return 0;
+    });
+
+    return result;
+}
+
+// Reset all filter controls
+function resetAllFilters() {
+    activeFilters = {
+        search: '',
+        customerType: 'all',
+        vehicleCount: 'all',
+        expiryWarning: 'all',
+        renewalStatus: 'all',
+        sortOrder: 'newest',
+        entryDate: 'all'
+    };
+
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.value = '';
+
+    const sortOrder = document.getElementById('filter-sort-order');
+    if (sortOrder) sortOrder.value = 'newest';
+
+    const entryDate = document.getElementById('filter-entry-date');
+    if (entryDate) entryDate.value = 'all';
+
+    const custType = document.getElementById('filter-customer-type');
+    if (custType) custType.value = 'all';
+
+    const vehCount = document.getElementById('filter-vehicle-count');
+    if (vehCount) vehCount.value = 'all';
+
+    const expWarning = document.getElementById('filter-expiry-warning');
+    if (expWarning) expWarning.value = 'all';
+
+    const renStatus = document.getElementById('filter-renewal-status');
+    if (renStatus) renStatus.value = 'all';
+
+    renderDashboard();
+    showToast('Filters reset to default view.', 'info');
 }
 
 // ==============================================================================
-// 6. MAIN TABLE RENDERING & INLINE ACTIONS
+// 6. MAIN TABLE RENDERING & INLINE ACTIONS (WITH S.NO & ROLE RESTRICTIONS)
 // ==============================================================================
 function renderDashboard() {
     updateKPIAnalytics();
@@ -429,15 +823,48 @@ function renderDashboard() {
     const tbody = document.getElementById('table-body');
     const emptyState = document.getElementById('empty-state');
 
+    if (!tbody) return;
     tbody.innerHTML = '';
 
-    if (filtered.length === 0) {
-        emptyState.style.display = 'block';
+    // If database is completely empty
+    if (customersData.length === 0) {
+        if (emptyState) {
+            emptyState.style.display = 'block';
+            emptyState.innerHTML = `
+                <div class="empty-icon-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect width="18" height="18" x="3" y="3" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+                </div>
+                <h3>No Customer Records Found</h3>
+                <p>Add your first customer to track multiple vehicles, individual insurance & PUC dates, RC attachments, Aadhaar, and PAN.</p>
+                <button class="btn btn-primary" onclick="document.getElementById('btn-add-customer').click()">
+                    + Add New Customer Record
+                </button>
+            `;
+        }
         return;
     }
-    emptyState.style.display = 'none';
 
-    filtered.forEach(c => {
+    // If filters returned 0 records but data exists in database
+    if (filtered.length === 0) {
+        if (emptyState) {
+            emptyState.style.display = 'block';
+            emptyState.innerHTML = `
+                <div class="empty-icon-wrap" style="color:var(--warning);">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+                </div>
+                <h3>No Records Match Filter Criteria</h3>
+                <p>No customer records match your active search and filter options. Try broadening your criteria or reset filters.</p>
+                <button class="btn btn-secondary" onclick="resetAllFilters()">
+                    🔄 Reset All Filters
+                </button>
+            `;
+        }
+        return;
+    }
+
+    if (emptyState) emptyState.style.display = 'none';
+
+    filtered.forEach((c, index) => {
         const tr = document.createElement('tr');
 
         // Customer Type Badge
@@ -497,7 +924,7 @@ function renderDashboard() {
             vehiclesHtml = '<span style="color:var(--text-muted); font-size:0.75rem;">No Vehicles</span>';
         }
 
-        // Documents Attached Pill List (Customer level: Aadhaar, PAN, Primary Ins, General PUC)
+        // Documents Attached Pill List
         let docPillsHtml = '';
         if (c.aadhar_doc_url) {
             docPillsHtml += `<button type="button" class="table-doc-pill pill-aadhar preview-any-doc-btn" data-doc-url="${escapeHtml(c.aadhar_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Aadhaar Card" title="Preview / Download Aadhaar">🆔 Aadhaar</button> `;
@@ -519,11 +946,31 @@ function renderDashboard() {
         // Inline Action: Renewal Status Dropdown
         const currentStatus = c.insurance_policy?.status || 'pending';
 
+        // Staff Creator Audit Tag
+        const creatorName = c.created_by_name || c.created_by_email || 'Staff';
+        const createdDate = formatDate(c.created_at);
+
+        // Delete Button: Allowed only for Admin role
+        const deleteButtonHtml = userRole === 'admin'
+            ? `<button type="button" class="btn-icon btn-danger-icon btn-delete" data-id="${c.id}" title="Delete Record (Admin)" aria-label="Delete record">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+               </button>`
+            : `<button type="button" class="btn-icon" style="opacity:0.4; cursor:not-allowed;" title="Delete locked to Admin only" disabled>
+                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+               </button>`;
+
         tr.innerHTML = `
+            <td style="text-align:center;">
+                <span class="sno-pill">#${index + 1}</span>
+            </td>
             <td>
                 <div class="customer-cell">
                     <span class="customer-name">${escapeHtml(c.full_name)}</span>
                     <span class="customer-phone">${escapeHtml(c.phone)}</span>
+                    <div class="staff-audit-tag">
+                        <span>👤 Added by: <strong>${escapeHtml(creatorName)}</strong></span>
+                        <span class="staff-audit-time">${createdDate}</span>
+                    </div>
                 </div>
             </td>
             <td>
@@ -556,9 +1003,7 @@ function renderDashboard() {
                     <button type="button" class="btn-icon btn-edit" data-id="${c.id}" title="Edit Customer & Vehicles" aria-label="Edit record">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
                     </button>
-                    <button type="button" class="btn-icon btn-danger-icon btn-delete" data-id="${c.id}" title="Delete Record" aria-label="Delete record">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
-                    </button>
+                    ${deleteButtonHtml}
                 </div>
             </td>
         `;
@@ -566,7 +1011,7 @@ function renderDashboard() {
         tbody.appendChild(tr);
     });
 
-    // Attach Event Listeners to dynamic table rows
+    // Attach dynamic listeners
     attachTableDynamicEvents();
 }
 
@@ -615,15 +1060,16 @@ async function updatePolicyStatus(customerId, newStatus) {
         customer.insurance_policy.status = newStatus;
     }
 
-    if (supabaseClient && customer.insurance_policy?.id) {
+    if (supabaseClient && customer.insurance_policy?.id && isValidUUID(customer.insurance_policy.id)) {
         try {
             const { error } = await supabaseClient
                 .from('insurance_policies')
-                .update({ status: newStatus })
+                .update({ status: newStatus, updated_at: new Date().toISOString() })
                 .eq('id', customer.insurance_policy.id);
 
             if (error) throw error;
             showToast('Policy status updated in Supabase cloud!', 'success');
+            await logActivity('policy_renewed', customer.full_name, `Policy marked as ${newStatus}`);
         } catch (err) {
             console.warn('Status cloud update failed:', err.message);
             showToast('Status updated locally.', 'info');
@@ -637,9 +1083,9 @@ async function updatePolicyStatus(customerId, newStatus) {
 }
 
 // ==============================================================================
-// 7. GENERIC DROPZONE ATTACHMENT HANDLER (AADHAAR, PAN, INSURANCE, PUC)
+// 7. GENERIC DROPZONE ATTACHMENT HANDLER WITH AUTO RC PLATE EXTRACTION
 // ==============================================================================
-function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbImgId, filenameId, filesizeId, previewBtnId, clearBtnId, stateHolder, titleLabel) {
+function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbImgId, filenameId, filesizeId, previewBtnId, clearBtnId, stateHolder, titleLabel, autoFetchIndex = null) {
     const fileInput = document.getElementById(fileInputId);
     const dropzone = document.getElementById(dropzoneId);
     const emptyBox = document.getElementById(emptyId);
@@ -652,31 +1098,35 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
 
     if (!fileInput || !dropzone) return;
 
-    // Check if existing URL
     if (stateHolder && stateHolder.previewUrl) {
-        emptyBox.style.display = 'none';
-        previewBox.style.display = 'flex';
-        filenameEl.textContent = stateHolder.name || 'Uploaded Document';
-        filesizeEl.textContent = 'Existing Cloud File';
-        if (stateHolder.isImage) {
-            thumbImg.src = stateHolder.previewUrl;
-            thumbImg.style.display = 'block';
-        } else {
-            thumbImg.style.display = 'none';
+        if (emptyBox) emptyBox.style.display = 'none';
+        if (previewBox) previewBox.style.display = 'flex';
+        if (filenameEl) filenameEl.textContent = stateHolder.name || 'Uploaded Document';
+        if (filesizeEl) filesizeEl.textContent = stateHolder.file ? `${(stateHolder.file.size / 1024).toFixed(1)} KB` : 'Existing Document';
+        if (thumbImg) {
+            if (stateHolder.isImage) {
+                thumbImg.src = stateHolder.previewUrl;
+                thumbImg.style.display = 'block';
+            } else {
+                thumbImg.style.display = 'none';
+            }
         }
-        previewBtn.onclick = (e) => {
-            e.stopPropagation();
-            openDocumentViewer(stateHolder.previewUrl, titleLabel);
-        };
+        if (previewBtn) {
+            previewBtn.onclick = (e) => {
+                e.stopPropagation();
+                openDocumentViewer(stateHolder.previewUrl, titleLabel);
+            };
+        }
     } else {
-        emptyBox.style.display = 'flex';
-        previewBox.style.display = 'none';
-        thumbImg.src = '';
-        filenameEl.textContent = '';
+        if (emptyBox) emptyBox.style.display = 'flex';
+        if (previewBox) previewBox.style.display = 'none';
+        if (thumbImg) thumbImg.src = '';
+        if (filenameEl) filenameEl.textContent = '';
     }
 
     dropzone.onclick = (e) => {
-        if (!e.target.closest('.doc-action-btns')) {
+        if (!e.target.closest('.doc-action-btns') && !e.target.closest('.thumbnail-actions')) {
+            fileInput.value = ''; // Reset input to re-trigger onchange if same file selected
             fileInput.click();
         }
     };
@@ -696,51 +1146,100 @@ function bindSingleDropzone(fileInputId, dropzoneId, emptyId, previewId, thumbIm
             stateHolder.name = file.name;
             stateHolder.isImage = isImage;
 
-            emptyBox.style.display = 'none';
-            previewBox.style.display = 'flex';
-            filenameEl.textContent = file.name;
-            filesizeEl.textContent = `${(file.size / 1024).toFixed(1)} KB`;
+            if (emptyBox) emptyBox.style.display = 'none';
+            if (previewBox) previewBox.style.display = 'flex';
+            if (filenameEl) filenameEl.textContent = file.name;
+            if (filesizeEl) filesizeEl.textContent = `${(file.size / 1024).toFixed(1)} KB`;
 
-            if (isImage) {
-                thumbImg.src = dataUrl;
-                thumbImg.style.display = 'block';
-            } else {
-                thumbImg.style.display = 'none';
+            if (thumbImg) {
+                if (isImage) {
+                    thumbImg.src = dataUrl;
+                    thumbImg.style.display = 'block';
+                } else {
+                    thumbImg.style.display = 'none';
+                }
             }
 
-            previewBtn.onclick = (ev) => {
-                ev.stopPropagation();
-                openDocumentViewer(dataUrl, `${titleLabel} — ${file.name}`);
-            };
+            if (previewBtn) {
+                previewBtn.onclick = (ev) => {
+                    ev.stopPropagation();
+                    openDocumentViewer(dataUrl, `${titleLabel} — ${file.name}`);
+                };
+            }
+
+            // Auto-fetch plate number from RC file if applicable
+            if (autoFetchIndex !== null) {
+                autoDetectPlateFromRC(file, autoFetchIndex);
+            }
         };
 
         reader.readAsDataURL(file);
     };
 
-    clearBtn.onclick = (e) => {
-        e.stopPropagation();
-        stateHolder.file = null;
-        stateHolder.previewUrl = null;
-        stateHolder.name = '';
-        stateHolder.isImage = false;
-        fileInput.value = '';
+    if (clearBtn) {
+        clearBtn.onclick = (e) => {
+            e.stopPropagation();
+            stateHolder.file = null;
+            stateHolder.previewUrl = null;
+            stateHolder.name = '';
+            stateHolder.isImage = false;
+            fileInput.value = '';
 
-        emptyBox.style.display = 'flex';
-        previewBox.style.display = 'none';
-        thumbImg.src = '';
-        filenameEl.textContent = '';
-    };
+            if (emptyBox) emptyBox.style.display = 'flex';
+            if (previewBox) previewBox.style.display = 'none';
+            if (thumbImg) thumbImg.src = '';
+            if (filenameEl) filenameEl.textContent = '';
+        };
+    }
 }
 
+// Auto & Manual RC Vehicle Number Extraction
+function autoDetectPlateFromRC(file, vehicleIndex) {
+    if (!file) return;
+    const plateInput = document.getElementById(`input-v-plate-${vehicleIndex}`);
+    const badgeEl = document.getElementById(`auto-fetch-badge-${vehicleIndex}`);
+
+    const cleanStr = file.name.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+    // Standard pattern: State (2 letters) + Code (1-2 digits) + Series (1-3 letters) + Number (4 digits)
+    const matchStandard = cleanStr.match(/([A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4})/);
+    // Bharat Series pattern: Year (2 digits) + BH + 4 digits + 1-2 letters (e.g. 22BH1234AA)
+    const matchBH = cleanStr.match(/([0-9]{2}BH[0-9]{4}[A-Z]{1,2})/);
+
+    let formatted = null;
+
+    if (matchStandard && matchStandard[1]) {
+        const raw = matchStandard[1];
+        formatted = raw.replace(/^([A-Z]{2})([0-9]{1,2})([A-Z]{1,3})([0-9]{4})$/, '$1-$2-$3-$4');
+    } else if (matchBH && matchBH[1]) {
+        const raw = matchBH[1];
+        formatted = raw.replace(/^([0-9]{2})(BH)([0-9]{4})([A-Z]{1,2})$/, '$1-$2-$3-$4');
+    }
+
+    if (formatted && plateInput) {
+        plateInput.value = formatted;
+        if (badgeEl) {
+            badgeEl.innerHTML = '<span class="auto-fetch-badge" style="background:var(--success-subtle); color:var(--success); padding:0.1rem 0.4rem; border-radius:var(--radius-sm); font-size:0.68rem; font-weight:700;">⚡ Auto-detected</span>';
+            badgeEl.style.display = 'inline-flex';
+        }
+        showToast(`Vehicle #${vehicleIndex} Plate ${formatted} auto-detected from RC file!`, 'success');
+    } else {
+        if (badgeEl) badgeEl.style.display = 'none';
+    }
+}
+
+// ==============================================================================
+// 8. DYNAMIC MULTI-VEHICLE RC ENGINE (AUTO + MANUAL SUPPORT)
+// ==============================================================================
 function renderDynamicVehicleInputs(count, existingVehicles = []) {
     const container = document.getElementById('dynamic-vehicles-container');
+    if (!container) return;
     const safeCount = Math.max(1, Math.min(20, parseInt(count) || 1));
     const inputCount = document.getElementById('input-vehicle-count');
     if (inputCount) inputCount.value = safeCount;
 
-    // Preserve already typed values in case count changed
     const currentValues = [];
-    container.querySelectorAll('.vehicle-entry-card').forEach((card, idx) => {
+    container.querySelectorAll('.vehicle-entry-card').forEach((card) => {
         const plate = card.querySelector('.input-v-plate')?.value || '';
         const insExpiry = card.querySelector('.input-v-ins-date')?.value || '';
         const pucExpiry = card.querySelector('.input-v-puc-date')?.value || '';
@@ -769,7 +1268,6 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
         const existingInsUrl = prev.insurance_doc_url || '';
         const existingPucUrl = prev.puc_doc_url || '';
 
-        // Ensure state holder exists for this vehicle index
         if (!vehicleFilesState[i]) {
             vehicleFilesState[i] = {
                 rc: { file: null, previewUrl: existingRcUrl || null, name: existingRcUrl ? 'Existing RC' : '', isImage: existingRcUrl ? existingRcUrl.match(/\.(jpeg|jpg|png|webp)/i) !== null : false },
@@ -793,8 +1291,16 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
 
             <div class="form-grid grid-3">
                 <div class="form-group">
-                    <label>Vehicle Plate Number <span class="required-star">*</span></label>
-                    <input type="text" class="input-mono input-uppercase input-v-plate" placeholder="e.g. OD-02-XX-1234" value="${escapeHtml(vPlate)}" required>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+                        <label for="input-v-plate-${i}">Vehicle Plate Number <span class="required-star">*</span></label>
+                        <span id="auto-fetch-badge-${i}" style="display:none;"></span>
+                    </div>
+                    <div style="display:flex; gap:0.35rem;">
+                        <input type="text" id="input-v-plate-${i}" class="input-mono input-uppercase input-v-plate flex-1" placeholder="e.g. OD-02-XX-1234" value="${escapeHtml(vPlate)}" required>
+                        <button type="button" class="btn-fetch-rc btn-secondary" data-v-idx="${i}" title="Extract Plate from Uploaded RC Document">
+                            <span>🔍 Fetch RC</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -892,49 +1398,94 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
 
         container.appendChild(card);
 
-        // Bind Dropzones for this Vehicle Card
-        bindSingleDropzone(`v-rc-input-${i}`, `v-rc-dropzone-${i}`, `v-rc-empty-${i}`, `v-rc-preview-${i}`, `v-rc-thumb-${i}`, `v-rc-name-${i}`, `v-rc-size-${i}`, `v-rc-view-${i}`, `v-rc-clear-${i}`, vehicleFilesState[i].rc, `Vehicle #${i} — RC Document`);
+        // Bind Dropzones for this Vehicle Card with autoFetchIndex
+        bindSingleDropzone(`v-rc-input-${i}`, `v-rc-dropzone-${i}`, `v-rc-empty-${i}`, `v-rc-preview-${i}`, `v-rc-thumb-${i}`, `v-rc-name-${i}`, `v-rc-size-${i}`, `v-rc-view-${i}`, `v-rc-clear-${i}`, vehicleFilesState[i].rc, `Vehicle #${i} — RC Document`, i);
         bindSingleDropzone(`v-ins-input-${i}`, `v-ins-dropzone-${i}`, `v-ins-empty-${i}`, `v-ins-preview-${i}`, `v-ins-thumb-${i}`, `v-ins-name-${i}`, `v-ins-size-${i}`, `v-ins-view-${i}`, `v-ins-clear-${i}`, vehicleFilesState[i].ins, `Vehicle #${i} — Insurance Policy`);
         bindSingleDropzone(`v-puc-input-${i}`, `v-puc-dropzone-${i}`, `v-puc-empty-${i}`, `v-puc-preview-${i}`, `v-puc-thumb-${i}`, `v-puc-name-${i}`, `v-puc-size-${i}`, `v-puc-view-${i}`, `v-puc-clear-${i}`, vehicleFilesState[i].puc, `Vehicle #${i} — PUC Certificate`);
     }
 
+    // Bind manual Fetch RC buttons
+    container.querySelectorAll('.btn-fetch-rc').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = parseInt(e.currentTarget.dataset.vIdx);
+            const state = vehicleFilesState[idx];
+            if (state && state.rc && state.rc.file) {
+                autoDetectPlateFromRC(state.rc.file, idx);
+            } else {
+                showToast('Please upload an RC document first to auto-detect plate number.', 'info');
+            }
+        });
+    });
+
     // Bind remove vehicle buttons
     container.querySelectorAll('.btn-remove-v').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            const idx = parseInt(e.currentTarget.dataset.vIdx);
-            delete vehicleFilesState[idx];
-            const currentTotal = container.querySelectorAll('.vehicle-entry-card').length;
-            renderDynamicVehicleInputs(currentTotal - 1);
+            const idxToRemove = parseInt(e.currentTarget.dataset.vIdx);
+            
+            // Re-index remaining vehicles
+            const newVehiclesList = [];
+            const newFileState = {};
+            let newCounter = 1;
+
+            container.querySelectorAll('.vehicle-entry-card').forEach((card) => {
+                const currentIdx = parseInt(card.dataset.index);
+                if (currentIdx !== idxToRemove) {
+                    const plate = card.querySelector('.input-v-plate')?.value || '';
+                    const insExpiry = card.querySelector('.input-v-ins-date')?.value || '';
+                    const pucExpiry = card.querySelector('.input-v-puc-date')?.value || '';
+                    const existingRcUrl = card.querySelector('.input-v-existing-rc-url')?.value || '';
+                    const existingInsUrl = card.querySelector('.input-v-existing-ins-url')?.value || '';
+                    const existingPucUrl = card.querySelector('.input-v-existing-puc-url')?.value || '';
+
+                    newVehiclesList.push({
+                        vehicle_number: plate,
+                        insurance_expiry_date: insExpiry,
+                        insurance_doc_url: existingInsUrl,
+                        puc_expiry_date: pucExpiry,
+                        puc_doc_url: existingPucUrl,
+                        rc_document_url: existingRcUrl
+                    });
+
+                    if (vehicleFilesState[currentIdx]) {
+                        newFileState[newCounter] = vehicleFilesState[currentIdx];
+                    }
+                    newCounter++;
+                }
+            });
+
+            vehicleFilesState = newFileState;
+            renderDynamicVehicleInputs(newVehiclesList.length, newVehiclesList);
         });
     });
 }
 
 // ==============================================================================
-// 9. FULL CRUD — SAVE ALL DATA IN ONCE (CUSTOMER, AADHAAR, PAN, POLICY, PUC, RCs)
+// 9. FULL CRUD — SAVE ALL DATA IN ONCE (WITH STAFF AUDIT LOGS)
 // ==============================================================================
 async function handleCustomerFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('btn-save-customer');
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '⏳ Uploading Files & Saving All Data in Once...';
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '⏳ Uploading Files & Saving All Data in Once...';
+    }
 
     try {
         const idVal = document.getElementById('form-customer-id').value;
-        const customerId = idVal || (crypto.randomUUID ? crypto.randomUUID() : `cust_${Date.now()}`);
+        const isNew = !idVal;
+        const customerId = (idVal && isValidUUID(idVal)) ? idVal : generateUUID();
 
         const fullName = document.getElementById('input-full-name').value.trim();
         const phone = document.getElementById('input-phone').value.trim();
         const pan = document.getElementById('input-pan').value.trim().toUpperCase();
         const aadhar = document.getElementById('input-aadhar').value.trim();
-        const customerType = document.querySelector('input[name="customer-type"]:checked').value;
+        const customerType = document.querySelector('input[name="customer-type"]:checked')?.value || 'permanent';
 
-        // Policy details
         const policyNumber = document.getElementById('input-policy-number').value.trim();
         const insuranceExpiry = document.getElementById('input-insurance-expiry').value || null;
         const policyStatus = document.getElementById('select-policy-status').value;
         const customerPucDate = document.getElementById('input-customer-puc-date').value || null;
 
-        // Existing URLs
         let finalAadharUrl = document.getElementById('input-existing-aadhar-url').value || null;
         let finalPanUrl = document.getElementById('input-existing-pan-url').value || null;
         let finalInsuranceUrl = document.getElementById('input-existing-insurance-url').value || null;
@@ -980,7 +1531,7 @@ async function handleCustomerFormSubmit(e) {
             }
         }
 
-        // Gather Dynamic Vehicles & Upload Individual RC, Insurance, and PUC Files
+        // Gather Dynamic Vehicles
         const vehicleCards = document.querySelectorAll('.vehicle-entry-card');
         const vehiclesList = [];
 
@@ -997,7 +1548,6 @@ async function handleCustomerFormSubmit(e) {
 
             const fileStates = vehicleFilesState[vIndex] || {};
 
-            // 1. Vehicle RC Upload
             let uploadedRcUrl = existingRcUrl;
             if (fileStates.rc && fileStates.rc.file) {
                 if (supabaseClient) {
@@ -1008,7 +1558,6 @@ async function handleCustomerFormSubmit(e) {
                 }
             }
 
-            // 2. Vehicle Insurance Upload
             let uploadedInsUrl = existingInsUrl;
             if (fileStates.ins && fileStates.ins.file) {
                 if (supabaseClient) {
@@ -1019,7 +1568,6 @@ async function handleCustomerFormSubmit(e) {
                 }
             }
 
-            // 3. Vehicle PUC Upload
             let uploadedPucUrl = existingPucUrl;
             if (fileStates.puc && fileStates.puc.file) {
                 if (supabaseClient) {
@@ -1031,16 +1579,20 @@ async function handleCustomerFormSubmit(e) {
             }
 
             vehiclesList.push({
-                id: (crypto.randomUUID ? crypto.randomUUID() : `veh_${Date.now()}_${vIndex}`),
+                id: generateUUID(),
                 customer_id: customerId,
                 vehicle_number: plate,
                 insurance_expiry_date: insExpiry,
                 insurance_doc_url: uploadedInsUrl,
                 puc_expiry_date: pucExpiry,
                 puc_doc_url: uploadedPucUrl,
-                rc_document_url: uploadedRcUrl
+                rc_document_url: uploadedRcUrl,
+                updated_by_email: currentAuthUser?.email || 'local_staff'
             });
         }
+
+        const staffEmail = currentAuthUser?.email || 'local_staff';
+        const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail;
 
         const customerPayload = {
             id: customerId,
@@ -1051,11 +1603,17 @@ async function handleCustomerFormSubmit(e) {
             aadhar_number: aadhar,
             aadhar_doc_url: finalAadharUrl,
             puc_doc_url: finalPucUrl,
+            puc_expiry_date: customerPucDate,
             type: customerType,
-            created_at: new Date().toISOString(),
+            created_by_email: isNew ? staffEmail : (customersData.find(c => c.id === customerId)?.created_by_email || staffEmail),
+            created_by_name: isNew ? staffName : (customersData.find(c => c.id === customerId)?.created_by_name || staffName),
+            updated_by_email: staffEmail,
+            updated_by_name: staffName,
+            created_at: isNew ? new Date().toISOString() : (customersData.find(c => c.id === customerId)?.created_at || new Date().toISOString()),
+            updated_at: new Date().toISOString(),
             vehicles: vehiclesList,
             insurance_policy: {
-                id: (crypto.randomUUID ? crypto.randomUUID() : `pol_${Date.now()}`),
+                id: generateUUID(),
                 customer_id: customerId,
                 policy_number: policyNumber,
                 insurance_expiry_date: insuranceExpiry,
@@ -1066,7 +1624,6 @@ async function handleCustomerFormSubmit(e) {
 
         // If Supabase Connected, execute database transactions
         if (supabaseClient) {
-            // 1. Upsert Customer
             const { error: custErr } = await supabaseClient
                 .from('customers')
                 .upsert([{
@@ -1078,21 +1635,26 @@ async function handleCustomerFormSubmit(e) {
                     aadhar_number: customerPayload.aadhar_number,
                     aadhar_doc_url: customerPayload.aadhar_doc_url,
                     puc_doc_url: customerPayload.puc_doc_url,
-                    type: customerPayload.type
+                    puc_expiry_date: customerPayload.puc_expiry_date,
+                    type: customerPayload.type,
+                    created_by_email: customerPayload.created_by_email,
+                    created_by_name: customerPayload.created_by_name,
+                    updated_by_email: customerPayload.updated_by_email,
+                    updated_by_name: customerPayload.updated_by_name,
+                    updated_at: customerPayload.updated_at
                 }]);
 
             if (custErr) throw custErr;
 
-            // 2. Remove old vehicles and insert new ones
             await supabaseClient.from('vehicles').delete().eq('customer_id', customerPayload.id);
             if (vehiclesList.length > 0) {
                 const { error: vehErr } = await supabaseClient.from('vehicles').insert(vehiclesList);
                 if (vehErr) throw vehErr;
             }
 
-            // 3. Upsert Insurance Policy
             await supabaseClient.from('insurance_policies').delete().eq('customer_id', customerPayload.id);
             const { error: polErr } = await supabaseClient.from('insurance_policies').insert([{
+                id: customerPayload.insurance_policy.id,
                 customer_id: customerPayload.id,
                 policy_number: policyNumber,
                 insurance_expiry_date: insuranceExpiry,
@@ -1101,22 +1663,63 @@ async function handleCustomerFormSubmit(e) {
             }]);
 
             if (polErr) throw polErr;
-            showToast('All customer KYC, fleet, individual insurance & PUC files saved to Supabase in once!', 'success');
+
+            await logActivity(
+                isNew ? 'customer_created' : 'customer_updated',
+                customerPayload.full_name,
+                `${vehiclesList.length} vehicles, RC & KYC files synced`
+            );
+
+            showToast('All customer KYC, fleet, and RC files saved to Supabase Cloud in once!', 'success');
         } else {
             showToast('All customer & document files saved to local storage in once!', 'info');
         }
 
-        // Save locally
         await localStoreManager.save(customerPayload);
-
         closeModal('modal-customer');
         await fetchAllData();
+        await fetchActivityLogs();
     } catch (err) {
         console.error('Error saving customer:', err);
         showToast(`Failed to save: ${err.message}`, 'error');
     } finally {
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save All Data in Once';
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save All Data in Once';
+        }
+    }
+}
+
+// Delete Record Handler (Strictly Restricted to Admin Role)
+async function handleDeleteCustomer(id) {
+    if (userRole !== 'admin') {
+        showToast('❌ Access Denied: Only Admin can delete customer records.', 'error');
+        return;
+    }
+
+    const customer = customersData.find(c => String(c.id) === String(id));
+    const confirmName = customer ? customer.full_name : 'this record';
+
+    if (!confirm(`Are you sure you want to permanently delete ${confirmName}? This will remove all associated vehicles, RC cards, and policies.`)) {
+        return;
+    }
+
+    try {
+        if (supabaseClient && isValidUUID(id)) {
+            const { error } = await supabaseClient.from('customers').delete().eq('id', id);
+            if (error) throw error;
+            await logActivity('customer_deleted', confirmName, 'Deleted by Admin');
+            showToast(`Deleted ${confirmName} from Supabase Cloud.`, 'success');
+        } else {
+            showToast(`Deleted ${confirmName} from Local Storage.`, 'info');
+        }
+
+        await localStoreManager.delete(id);
+        await fetchAllData();
+        await fetchActivityLogs();
+    } catch (err) {
+        console.error('Delete error:', err);
+        showToast(`Delete failed: ${err.message}`, 'error');
     }
 }
 
@@ -1159,23 +1762,23 @@ function openEditCustomerModal(id) {
     };
     bindSingleDropzone('input-pan-file', 'pan-dropzone', 'pan-dropzone-empty', 'pan-dropzone-preview', 'pan-thumb-img', 'pan-filename', 'pan-filesize', 'btn-preview-pan', 'btn-clear-pan', formPanDoc, `${customer.full_name} — PAN Card`);
 
-    // Primary Insurance Policy Prepopulation
-    if (customer.insurance_policy) {
-        document.getElementById('input-policy-number').value = customer.insurance_policy.policy_number || '';
-        document.getElementById('input-insurance-expiry').value = customer.insurance_policy.insurance_expiry_date || '';
-        document.getElementById('select-policy-status').value = customer.insurance_policy.status || 'pending';
-        document.getElementById('input-existing-insurance-url').value = customer.insurance_policy.policy_doc_url || '';
+    // Primary Policy Prepopulation
+    const pol = customer.insurance_policy || {};
+    document.getElementById('input-policy-number').value = pol.policy_number || '';
+    document.getElementById('input-insurance-expiry').value = pol.insurance_expiry_date || '';
+    document.getElementById('select-policy-status').value = pol.status || 'pending';
+    document.getElementById('input-existing-insurance-url').value = pol.policy_doc_url || '';
 
-        formInsuranceDoc = {
-            file: null,
-            previewUrl: customer.insurance_policy.policy_doc_url || null,
-            name: customer.insurance_policy.policy_doc_url ? 'Existing Primary Policy' : '',
-            isImage: customer.insurance_policy.policy_doc_url ? customer.insurance_policy.policy_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false
-        };
-    }
-    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, `${customer.full_name} — Primary Policy`);
+    formInsuranceDoc = {
+        file: null,
+        previewUrl: pol.policy_doc_url || null,
+        name: pol.policy_doc_url ? 'Existing Insurance Policy' : '',
+        isImage: pol.policy_doc_url ? pol.policy_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false
+    };
+    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, `${customer.full_name} — Insurance Policy`);
 
-    // General PUC Certificate Prepopulation
+    // General Customer PUC Prepopulation
+    document.getElementById('input-customer-puc-date').value = customer.puc_expiry_date || '';
     document.getElementById('input-existing-puc-url').value = customer.puc_doc_url || '';
     formPucDoc = {
         file: null,
@@ -1185,81 +1788,664 @@ function openEditCustomerModal(id) {
     };
     bindSingleDropzone('input-puc-file', 'puc-dropzone', 'puc-dropzone-empty', 'puc-dropzone-preview', 'puc-thumb-img', 'puc-filename', 'puc-filesize', 'btn-preview-puc', 'btn-clear-puc', formPucDoc, `${customer.full_name} — General PUC`);
 
-    // Vehicles Prepopulation
-    const vList = (customer.vehicles && customer.vehicles.length > 0) ? customer.vehicles : [{}];
-    vehicleFilesState = {};
-    vList.forEach((v, idx) => {
-        const i = idx + 1;
-        vehicleFilesState[i] = {
-            rc: { file: null, previewUrl: v.rc_document_url || null, name: v.rc_document_url ? 'Existing RC' : '', isImage: v.rc_document_url ? v.rc_document_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false },
-            ins: { file: null, previewUrl: v.insurance_doc_url || null, name: v.insurance_doc_url ? 'Existing Ins Doc' : '', isImage: v.insurance_doc_url ? v.insurance_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false },
-            puc: { file: null, previewUrl: v.puc_doc_url || null, name: v.puc_doc_url ? 'Existing PUC Doc' : '', isImage: v.puc_doc_url ? v.puc_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false }
-        };
-    });
+    // Render Dynamic Vehicles
+    const count = (customer.vehicles && customer.vehicles.length) || 1;
+    renderDynamicVehicleInputs(count, customer.vehicles || []);
 
-    renderDynamicVehicleInputs(vList.length, vList);
-
-    document.getElementById('modal-form-title').textContent = 'Edit Customer & Fleet';
+    document.getElementById('modal-form-title').textContent = `Edit Customer: ${customer.full_name}`;
     openModal('modal-customer');
 }
 
-// Delete Customer (Cascades to Vehicles & Policies in Supabase)
-async function handleDeleteCustomer(id) {
-    const customer = customersData.find(c => String(c.id) === String(id));
-    if (!customer) return;
+// ==============================================================================
+// 10. DATE-WISE DATA ENTRY & ACTIVITY TRACKER LOGIC
+// ==============================================================================
+async function logActivity(actionType, customerName, details) {
+    const staffEmail = currentAuthUser?.email || 'local_staff';
+    const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail;
+    const item = {
+        id: generateUUID(),
+        action_type: actionType,
+        customer_name: customerName,
+        details: details,
+        actor_email: staffEmail,
+        actor_name: staffName,
+        created_at: new Date().toISOString()
+    };
 
-    const confirmed = confirm(`Are you sure you want to delete customer "${customer.full_name}"?\nAll associated vehicles, RC documents, and policy records will be deleted.`);
-    if (!confirmed) return;
+    activityLogs.unshift(item);
+    if (activityLogs.length > 200) activityLogs.pop();
 
     if (supabaseClient) {
         try {
-            const { error } = await supabaseClient
-                .from('customers')
-                .delete()
-                .eq('id', id);
-
-            if (error) throw error;
-            showToast('Customer and associated records deleted from Supabase.', 'success');
+            await supabaseClient.from('activity_logs').insert([item]);
         } catch (err) {
-            console.error('Delete error:', err);
-            showToast(`Delete failed: ${err.message}`, 'error');
+            console.warn('Activity log sync notice:', err.message);
         }
     }
+}
 
-    await localStoreManager.delete(id);
-    await fetchAllData();
+async function fetchActivityLogs() {
+    if (supabaseClient) {
+        try {
+            const { data } = await supabaseClient
+                .from('activity_logs')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(100);
+            if (data && data.length > 0) {
+                activityLogs = data;
+            }
+        } catch (err) {
+            console.warn('Failed to fetch cloud activity logs:', err.message);
+        }
+    }
+}
+
+function renderActivityTracker(filterDate = 'all') {
+    const listEl = document.getElementById('activity-timeline-list');
+    const statCustEl = document.getElementById('stat-activity-customers');
+    const statUploadsEl = document.getElementById('stat-activity-uploads');
+    const statPoliciesEl = document.getElementById('stat-activity-policies');
+    const footerCount = document.getElementById('activity-footer-count');
+
+    if (!listEl) return;
+    listEl.innerHTML = '';
+
+    // Filter logs with local date comparison
+    let filteredLogs = activityLogs.filter(log => {
+        if (!filterDate || filterDate === 'all') return true;
+        if (filterDate === 'today') return isToday(log.created_at);
+        if (filterDate === 'yesterday') return isYesterday(log.created_at);
+        if (filterDate === 'this-week') return isThisWeek(log.created_at);
+
+        // Specific YYYY-MM-DD picker from user
+        const d = parseLocalDate(log.created_at);
+        if (!d) return false;
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const logDateStr = `${yyyy}-${mm}-${dd}`;
+        return logDateStr === filterDate;
+    });
+
+    // Compute metrics
+    let custCount = 0;
+    let uploadCount = 0;
+    let polCount = 0;
+
+    filteredLogs.forEach(l => {
+        if (l.action_type === 'customer_created' || l.action_type === 'customer_updated') custCount++;
+        if (l.action_type === 'rc_uploaded' || l.details?.includes('files synced') || l.details?.includes('RC')) uploadCount++;
+        if (l.action_type === 'policy_renewed' || l.details?.includes('Policy')) polCount++;
+    });
+
+    if (statCustEl) statCustEl.textContent = custCount;
+    if (statUploadsEl) statUploadsEl.textContent = uploadCount;
+    if (statPoliciesEl) statPoliciesEl.textContent = polCount;
+    if (footerCount) footerCount.textContent = `Showing ${filteredLogs.length} audit entries for ${filterDate === 'all' ? 'All Dates' : filterDate}`;
+
+    if (filteredLogs.length === 0) {
+        listEl.innerHTML = `
+            <div style="text-align:center; padding:2rem 1rem; color:var(--text-muted);">
+                <span style="font-size:1.75rem;">📅</span>
+                <p style="margin-top:0.5rem; font-weight:600;">No entry logs found for the selected date.</p>
+                <span style="font-size:0.75rem;">Add customer records or upload documents to generate live audit entries.</span>
+            </div>
+        `;
+        return;
+    }
+
+    const iconMap = {
+        customer_created: { icon: '✨', title: 'New Customer & Fleet Added' },
+        customer_updated: { icon: '📝', title: 'Customer Record Modified' },
+        customer_deleted: { icon: '🗑️', title: 'Customer Deleted by Admin' },
+        rc_uploaded: { icon: '🚗', title: 'RC Document Uploaded' },
+        policy_renewed: { icon: '🔄', title: 'Policy Status Renewed' },
+        backup_restored: { icon: '📥', title: 'Database Backup Restored' }
+    };
+
+    filteredLogs.forEach(log => {
+        const info = iconMap[log.action_type] || { icon: '📋', title: 'CMS Activity' };
+        const card = document.createElement('div');
+        card.className = 'activity-card';
+
+        card.innerHTML = `
+            <div class="activity-card-icon">${info.icon}</div>
+            <div class="activity-card-body">
+                <div class="activity-card-header">
+                    <span class="activity-card-title">${info.title}: <strong>${escapeHtml(log.customer_name || 'System')}</strong></span>
+                    <span class="activity-card-time">${formatDate(log.created_at)} at ${formatTime(log.created_at)}</span>
+                </div>
+                <div class="activity-card-meta">
+                    <span>${escapeHtml(log.details || '')}</span> · 
+                    <span style="color:var(--primary); font-weight:600;">👤 ${escapeHtml(log.actor_name || log.actor_email || 'Staff')}</span>
+                </div>
+            </div>
+        `;
+        listEl.appendChild(card);
+    });
+}
+
+function setupActivityTrackerEvents() {
+    const btnOpen = document.getElementById('btn-open-activity');
+    const datePicker = document.getElementById('activity-filter-date');
+    const btnRefresh = document.getElementById('btn-refresh-activity');
+
+    if (btnOpen) {
+        btnOpen.addEventListener('click', async () => {
+            await fetchActivityLogs();
+            renderActivityTracker('all');
+            openModal('modal-activity-tracker');
+        });
+    }
+
+    if (datePicker) {
+        datePicker.addEventListener('change', (e) => {
+            const val = e.target.value;
+            document.querySelectorAll('.activity-quick-chips .chip-btn').forEach(b => b.classList.remove('active'));
+            renderActivityTracker(val);
+        });
+    }
+
+    if (btnRefresh) {
+        btnRefresh.addEventListener('click', async () => {
+            await fetchActivityLogs();
+            renderActivityTracker(datePicker?.value || 'all');
+            showToast('Activity audit trail refreshed!', 'info');
+        });
+    }
+
+    document.querySelectorAll('.activity-quick-chips .chip-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.activity-quick-chips .chip-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            const range = e.currentTarget.dataset.range;
+            if (datePicker) datePicker.value = '';
+            renderActivityTracker(range);
+        });
+    });
 }
 
 // ==============================================================================
-// 10. UNIVERSAL DOCUMENT PREVIEWER & DIRECT DOWNLOAD
+// 11. MANUAL BACKUP: EXPORT & IMPORT ENGINE (JSON & CSV EXCEL SPREADSHEET)
 // ==============================================================================
-function openDocumentViewer(url, title = 'Document Preview') {
+function exportBackupJSON() {
+    const backupObj = {
+        version: "2.0",
+        app_name: "JD ENTERPRISES CMS Monitor",
+        exported_at: new Date().toISOString(),
+        exported_by: currentAuthUser?.email || 'local_user',
+        total_customers: customersData.length,
+        customers: customersData,
+        activity_logs: activityLogs
+    };
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupObj, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute("href", dataStr);
+    dlAnchor.setAttribute("download", `JD_Enterprises_Backup_${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    dlAnchor.remove();
+
+    showToast('Full JSON Database Backup exported successfully!', 'success');
+}
+
+function exportBackupCSV() {
+    if (customersData.length === 0) {
+        showToast('No customer records found to export.', 'warning');
+        return;
+    }
+
+    const headers = [
+        "S.No",
+        "Customer Name",
+        "Phone Number",
+        "Type",
+        "PAN Number",
+        "Aadhaar Number",
+        "Vehicle Count",
+        "Vehicle Plates",
+        "Primary Policy Number",
+        "Primary Insurance Expiry",
+        "General PUC Expiry",
+        "Policy Status",
+        "Created By",
+        "Created Date"
+    ];
+
+    const rows = customersData.map((c, idx) => {
+        const plates = (c.vehicles || []).map(v => v.vehicle_number || '').join('; ');
+        return [
+            idx + 1,
+            `"${(c.full_name || '').replace(/"/g, '""')}"`,
+            `"${c.phone || ''}"`,
+            `"${c.type || 'permanent'}"`,
+            `"${c.pan_number || ''}"`,
+            `"${c.aadhar_number || ''}"`,
+            (c.vehicles || []).length,
+            `"${plates.replace(/"/g, '""')}"`,
+            `"${(c.insurance_policy?.policy_number || '').replace(/"/g, '""')}"`,
+            `"${c.insurance_policy?.insurance_expiry_date || ''}"`,
+            `"${c.puc_expiry_date || ''}"`,
+            `"${c.insurance_policy?.status || 'pending'}"`,
+            `"${(c.created_by_name || c.created_by_email || 'Staff').replace(/"/g, '""')}"`,
+            `"${c.created_at ? new Date(c.created_at).toISOString().split('T')[0] : ''}"`
+        ].join(',');
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent([headers.join(','), ...rows].join('\n'));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute("href", csvContent);
+    dlAnchor.setAttribute("download", `JD_Enterprises_Fleet_Spreadsheet_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    dlAnchor.remove();
+
+    showToast('Excel/CSV Spreadsheet exported with Serial Numbers!', 'success');
+}
+
+// CSV Line Parser (handles quoted values, escaped quotes, commas)
+function parseCSV(text) {
+    const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+    if (lines.length <= 1) return [];
+
+    function parseCSVLine(line) {
+        const values = [];
+        let curr = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+                if (inQuotes && line[i + 1] === '"') {
+                    curr += '"';
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (char === ',' && !inQuotes) {
+                values.push(curr.trim());
+                curr = '';
+            } else {
+                curr += char;
+            }
+        }
+        values.push(curr.trim());
+        return values;
+    }
+
+    const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const parsedRecords = [];
+
+    for (let l = 1; l < lines.length; l++) {
+        const cols = parseCSVLine(lines[l]);
+        if (cols.length === 0 || !cols.some(c => c.length > 0)) continue;
+
+        const rowObj = {};
+        headers.forEach((h, idx) => {
+            rowObj[h] = cols[idx] || '';
+        });
+
+        const name = rowObj['customername'] || rowObj['name'] || cols[1] || '';
+        const phone = rowObj['phonenumber'] || rowObj['phone'] || cols[2] || '';
+        const type = (rowObj['type'] || cols[3] || '').toLowerCase().includes('lead') ? 'lead' : 'permanent';
+        const pan = rowObj['pannumber'] || rowObj['pan'] || cols[4] || '';
+        const aadhar = rowObj['aadhaarnumber'] || rowObj['aadhar'] || cols[5] || '';
+        const plateStr = rowObj['vehicleplates'] || rowObj['plates'] || cols[7] || '';
+        const policyNum = rowObj['primarypolicynumber'] || rowObj['policynumber'] || cols[8] || '';
+        const insDate = rowObj['primaryinsuranceexpiry'] || rowObj['insuranceexpiry'] || cols[9] || null;
+        const pucDate = rowObj['generalpucexpiry'] || rowObj['pucexpiry'] || cols[10] || null;
+        const status = (rowObj['policystatus'] || rowObj['status'] || cols[11] || 'pending').toLowerCase();
+        const createdBy = rowObj['createdby'] || cols[12] || 'Staff';
+        const createdDate = rowObj['createddate'] || cols[13] || new Date().toISOString();
+
+        if (!name && !phone) continue;
+
+        const custId = generateUUID();
+        const vehicles = [];
+        const rawPlates = plateStr.split(/[;,|]/).map(p => p.trim()).filter(p => p.length > 0);
+
+        if (rawPlates.length > 0) {
+            rawPlates.forEach(p => {
+                vehicles.push({
+                    id: generateUUID(),
+                    customer_id: custId,
+                    vehicle_number: p.toUpperCase(),
+                    insurance_expiry_date: insDate,
+                    insurance_doc_url: null,
+                    puc_expiry_date: pucDate,
+                    puc_doc_url: null,
+                    rc_document_url: null
+                });
+            });
+        } else {
+            vehicles.push({
+                id: generateUUID(),
+                customer_id: custId,
+                vehicle_number: 'OD-02-XX-0001',
+                insurance_expiry_date: insDate,
+                insurance_doc_url: null,
+                puc_expiry_date: pucDate,
+                puc_doc_url: null,
+                rc_document_url: null
+            });
+        }
+
+        parsedRecords.push({
+            id: custId,
+            full_name: name,
+            phone: phone,
+            pan_number: pan.toUpperCase(),
+            pan_doc_url: null,
+            aadhar_number: aadhar,
+            aadhar_doc_url: null,
+            puc_doc_url: null,
+            puc_expiry_date: pucDate,
+            type: type,
+            created_by_email: createdBy,
+            created_by_name: createdBy,
+            updated_by_email: createdBy,
+            updated_by_name: createdBy,
+            created_at: createdDate ? new Date(createdDate).toISOString() : new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            vehicles: vehicles,
+            insurance_policy: {
+                id: generateUUID(),
+                customer_id: custId,
+                policy_number: policyNum,
+                insurance_expiry_date: insDate,
+                policy_doc_url: null,
+                status: ['completed', 'not_done'].includes(status) ? status : 'pending'
+            }
+        });
+    }
+
+    return parsedRecords;
+}
+
+function setupBackupDropzone() {
+    const dropzone = document.getElementById('backup-import-dropzone');
+    const fileInput = document.getElementById('input-backup-file');
+    const emptyBox = document.getElementById('backup-dropzone-empty');
+    const previewBox = document.getElementById('backup-dropzone-preview');
+    const filenameEl = document.getElementById('backup-filename');
+    const statsEl = document.getElementById('backup-summary-stats');
+    const clearBtn = document.getElementById('btn-clear-backup-file');
+    const executeBtn = document.getElementById('btn-execute-import');
+    const feedback = document.getElementById('import-status-feedback');
+
+    if (!dropzone || !fileInput) return;
+
+    dropzone.onclick = (e) => {
+        if (!e.target.closest('#btn-clear-backup-file')) {
+            fileInput.value = '';
+            fileInput.click();
+        }
+    };
+
+    dropzone.ondragover = (e) => {
+        e.preventDefault();
+        dropzone.classList.add('drag-over');
+    };
+
+    dropzone.ondragleave = () => {
+        dropzone.classList.remove('drag-over');
+    };
+
+    dropzone.ondrop = (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) {
+            handleBackupFile(e.dataTransfer.files[0]);
+        }
+    };
+
+    fileInput.onchange = (e) => {
+        if (e.target.files.length > 0) {
+            handleBackupFile(e.target.files[0]);
+        }
+    };
+
+    if (clearBtn) {
+        clearBtn.onclick = (e) => {
+            e.stopPropagation();
+            backupParsedData = null;
+            fileInput.value = '';
+            if (emptyBox) emptyBox.style.display = 'flex';
+            if (previewBox) previewBox.style.display = 'none';
+            if (executeBtn) executeBtn.disabled = true;
+            if (feedback) feedback.style.display = 'none';
+        };
+    }
+
+    function handleBackupFile(file) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const text = ev.target.result;
+            try {
+                if (file.name.toLowerCase().endsWith('.json')) {
+                    const parsed = JSON.parse(text);
+                    const customers = Array.isArray(parsed) ? parsed : (parsed.customers || []);
+                    if (!Array.isArray(customers) || customers.length === 0) {
+                        throw new Error('No valid customer records found in JSON file.');
+                    }
+                    
+                    // Normalize records
+                    backupParsedData = customers.map(c => ({
+                        ...c,
+                        id: (c.id && isValidUUID(c.id)) ? c.id : generateUUID(),
+                        vehicles: (c.vehicles || []).map(v => ({
+                            ...v,
+                            id: (v.id && isValidUUID(v.id)) ? v.id : generateUUID()
+                        })),
+                        insurance_policy: c.insurance_policy ? {
+                            ...c.insurance_policy,
+                            id: (c.insurance_policy.id && isValidUUID(c.insurance_policy.id)) ? c.insurance_policy.id : generateUUID()
+                        } : {
+                            id: generateUUID(),
+                            policy_number: '',
+                            insurance_expiry_date: null,
+                            policy_doc_url: null,
+                            status: 'pending'
+                        }
+                    }));
+
+                    if (parsed.activity_logs && Array.isArray(parsed.activity_logs)) {
+                        activityLogs = parsed.activity_logs;
+                    }
+
+                    if (emptyBox) emptyBox.style.display = 'none';
+                    if (previewBox) previewBox.style.display = 'flex';
+                    if (filenameEl) filenameEl.textContent = file.name;
+                    if (statsEl) statsEl.textContent = `Found ${backupParsedData.length} customer records ready to restore.`;
+                    if (executeBtn) executeBtn.disabled = false;
+                    if (feedback) {
+                        feedback.className = 'status-feedback badge-info';
+                        feedback.textContent = `✅ Ready to restore ${backupParsedData.length} records. Select mode below.`;
+                        feedback.style.display = 'block';
+                    }
+                } else if (file.name.toLowerCase().endsWith('.csv')) {
+                    const parsedCustomers = parseCSV(text);
+                    if (!parsedCustomers || parsedCustomers.length === 0) {
+                        throw new Error('Could not parse any customer rows from CSV spreadsheet.');
+                    }
+                    backupParsedData = parsedCustomers;
+
+                    if (emptyBox) emptyBox.style.display = 'none';
+                    if (previewBox) previewBox.style.display = 'flex';
+                    if (filenameEl) filenameEl.textContent = file.name;
+                    if (statsEl) statsEl.textContent = `Parsed ${backupParsedData.length} spreadsheet records ready to restore.`;
+                    if (executeBtn) executeBtn.disabled = false;
+                    if (feedback) {
+                        feedback.className = 'status-feedback badge-info';
+                        feedback.textContent = `✅ Parsed ${backupParsedData.length} fleet records from CSV spreadsheet.`;
+                        feedback.style.display = 'block';
+                    }
+                } else {
+                    throw new Error('Unsupported file format. Please upload a .json or .csv backup file.');
+                }
+            } catch (err) {
+                console.error('Backup parse error:', err);
+                showToast(`Invalid backup file: ${err.message}`, 'error');
+                if (feedback) {
+                    feedback.className = 'status-feedback badge-danger';
+                    feedback.textContent = `❌ ${err.message}`;
+                    feedback.style.display = 'block';
+                }
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    if (executeBtn) {
+        executeBtn.addEventListener('click', async () => {
+            if (!backupParsedData || backupParsedData.length === 0) {
+                showToast('Please select a valid backup file first.', 'warning');
+                return;
+            }
+
+            const mode = document.querySelector('input[name="import-mode"]:checked')?.value || 'merge';
+            executeBtn.disabled = true;
+            executeBtn.innerHTML = '⏳ Restoring & Syncing Backup...';
+
+            try {
+                if (mode === 'replace') {
+                    customersData = backupParsedData;
+                    await localStoreManager.clearAll();
+                } else {
+                    // Merge mode: Add or update existing by ID
+                    const existingMap = new Map(customersData.map(c => [c.id, c]));
+                    backupParsedData.forEach(item => {
+                        existingMap.set(item.id, item);
+                    });
+                    customersData = Array.from(existingMap.values());
+                }
+
+                // Sync to IndexedDB
+                for (let c of customersData) {
+                    await localStoreManager.save(c);
+                }
+
+                // If Supabase Connected, upsert cloud database
+                if (supabaseClient) {
+                    if (mode === 'replace') {
+                        try {
+                            await supabaseClient.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+                        } catch (e) {}
+                    }
+
+                    for (let c of backupParsedData) {
+                        const validCustId = (c.id && isValidUUID(c.id)) ? c.id : generateUUID();
+                        c.id = validCustId;
+
+                        const { error: custErr } = await supabaseClient.from('customers').upsert([{
+                            id: validCustId,
+                            full_name: c.full_name || 'Customer',
+                            phone: c.phone || '',
+                            pan_number: c.pan_number || null,
+                            pan_doc_url: c.pan_doc_url || null,
+                            aadhar_number: c.aadhar_number || null,
+                            aadhar_doc_url: c.aadhar_doc_url || null,
+                            puc_doc_url: c.puc_doc_url || null,
+                            puc_expiry_date: c.puc_expiry_date || null,
+                            type: c.type || 'permanent',
+                            created_by_email: c.created_by_email || 'Staff',
+                            created_by_name: c.created_by_name || 'Staff',
+                            updated_by_email: c.updated_by_email || 'Staff',
+                            updated_by_name: c.updated_by_name || 'Staff',
+                            created_at: c.created_at || new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        }]);
+
+                        if (custErr) console.warn('Supabase customer upsert warning:', custErr.message);
+
+                        if (c.vehicles && c.vehicles.length > 0) {
+                            await supabaseClient.from('vehicles').delete().eq('customer_id', validCustId);
+                            const vehPayloads = c.vehicles.map(v => ({
+                                id: (v.id && isValidUUID(v.id)) ? v.id : generateUUID(),
+                                customer_id: validCustId,
+                                vehicle_number: v.vehicle_number || '',
+                                rc_document_url: v.rc_document_url || null,
+                                insurance_expiry_date: v.insurance_expiry_date || null,
+                                insurance_doc_url: v.insurance_doc_url || null,
+                                puc_expiry_date: v.puc_expiry_date || null,
+                                puc_doc_url: v.puc_doc_url || null,
+                                updated_by_email: currentAuthUser?.email || 'Staff'
+                            }));
+                            const { error: vErr } = await supabaseClient.from('vehicles').insert(vehPayloads);
+                            if (vErr) console.warn('Vehicles insert notice:', vErr.message);
+                        }
+
+                        if (c.insurance_policy) {
+                            await supabaseClient.from('insurance_policies').delete().eq('customer_id', validCustId);
+                            const { error: pErr } = await supabaseClient.from('insurance_policies').insert([{
+                                id: (c.insurance_policy.id && isValidUUID(c.insurance_policy.id)) ? c.insurance_policy.id : generateUUID(),
+                                customer_id: validCustId,
+                                policy_number: c.insurance_policy.policy_number || '',
+                                insurance_expiry_date: c.insurance_policy.insurance_expiry_date || null,
+                                policy_doc_url: c.insurance_policy.policy_doc_url || null,
+                                status: c.insurance_policy.status || 'pending'
+                            }]);
+                            if (pErr) console.warn('Policy insert notice:', pErr.message);
+                        }
+                    }
+                    showToast(`Backup restored and synced to Supabase Cloud (${mode} mode)!`, 'success');
+                } else {
+                    showToast(`Backup restored to Local Storage (${mode} mode)!`, 'info');
+                }
+
+                await logActivity('backup_restored', `${backupParsedData.length} records`, `Restored in ${mode} mode`);
+                closeModal('modal-import-backup');
+                await fetchAllData();
+                await fetchActivityLogs();
+            } catch (err) {
+                console.error('Backup restore failed:', err);
+                showToast(`Restore failed: ${err.message}`, 'error');
+            } finally {
+                executeBtn.disabled = false;
+                executeBtn.innerHTML = '<span>Restore & Sync Backup</span>';
+            }
+        });
+    }
+}
+
+// Universal Document Viewer Modal
+function openDocumentViewer(url, title) {
     if (!url) {
         showToast('No document attachment available to preview.', 'warning');
         return;
     }
-
     const previewContainer = document.getElementById('preview-container');
     const titleEl = document.getElementById('preview-doc-title');
-    const subtitleEl = document.getElementById('preview-doc-subtitle');
     const downloadBtn = document.getElementById('btn-download-preview-doc');
 
-    titleEl.textContent = title;
-    subtitleEl.textContent = 'Previewing document. Click "Download Document" below to save a copy.';
+    if (!previewContainer) return;
     previewContainer.innerHTML = '';
-    downloadBtn.href = url;
+    if (titleEl) titleEl.textContent = title || 'Document Preview';
+    if (downloadBtn) {
+        downloadBtn.href = url;
+        downloadBtn.setAttribute('download', `${(title || 'document').replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+    }
 
     const isPdf = url.includes('.pdf') || url.startsWith('data:application/pdf');
 
     if (isPdf) {
         const iframe = document.createElement('iframe');
         iframe.src = url;
-        iframe.title = title;
+        iframe.title = title || 'Document';
+        iframe.style.width = '100%';
+        iframe.style.height = '70vh';
+        iframe.style.border = 'none';
+        iframe.style.borderRadius = 'var(--radius-md)';
         previewContainer.appendChild(iframe);
     } else {
         const img = document.createElement('img');
         img.src = url;
-        img.alt = title;
+        img.alt = title || 'Document';
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '70vh';
+        img.style.objectFit = 'contain';
+        img.style.borderRadius = 'var(--radius-md)';
         previewContainer.appendChild(img);
     }
 
@@ -1267,12 +2453,16 @@ function openDocumentViewer(url, title = 'Document Preview') {
 }
 
 // ==============================================================================
-// 11. SUPABASE SETTINGS MODAL & CONNECTION TEST
+// 12. SUPABASE SETTINGS MODAL & CONNECTION TEST
 // ==============================================================================
 async function testSupabaseConnection() {
-    const url = document.getElementById('cfg-supabase-url').value.trim();
-    const key = document.getElementById('cfg-supabase-anon-key').value.trim();
+    const rawUrl = document.getElementById('cfg-supabase-url').value.trim();
+    const rawKey = document.getElementById('cfg-supabase-anon-key').value.trim();
+    const url = rawUrl.replace(/\/+$/, '');
+    const key = rawKey;
+
     const feedback = document.getElementById('supabase-test-feedback');
+    if (!feedback) return;
     feedback.style.display = 'block';
 
     if (!url || !key) {
@@ -1281,19 +2471,28 @@ async function testSupabaseConnection() {
         return;
     }
 
+    if (!url.startsWith('https://')) {
+        feedback.className = 'status-feedback badge-danger';
+        feedback.textContent = '❌ Project URL must start with https:// (e.g. https://xyzcompany.supabase.co)';
+        return;
+    }
+
     feedback.className = 'status-feedback badge-info';
     feedback.textContent = '⏳ Testing connection to Supabase database...';
 
     try {
+        if (!window.supabase) {
+            throw new Error('Supabase JS SDK not loaded. Please check your internet connection.');
+        }
         const client = window.supabase.createClient(url, key);
         const { data, error } = await client.from('customers').select('id').limit(1);
 
         if (error) {
             feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ Database Error: ${error.message} (Did you execute schema.sql?)`;
+            feedback.innerHTML = `❌ Database Error: ${error.message}<br><small style="margin-top:0.25rem; display:block;">Please run <code>schema.sql</code> in your Supabase SQL Editor to initialize tables and RLS.</small>`;
         } else {
             feedback.className = 'status-feedback badge-success';
-            feedback.textContent = '✅ Connected successfully! Tables and RLS policies verified.';
+            feedback.textContent = '✅ Connected successfully! PostgreSQL tables and RLS verified.';
         }
     } catch (err) {
         feedback.className = 'status-feedback badge-danger';
@@ -1301,16 +2500,19 @@ async function testSupabaseConnection() {
     }
 }
 
-function saveSupabaseSettings() {
-    const url = document.getElementById('cfg-supabase-url').value.trim();
-    const key = document.getElementById('cfg-supabase-anon-key').value.trim();
+async function saveSupabaseSettings() {
+    const rawUrl = document.getElementById('cfg-supabase-url').value.trim();
+    const rawKey = document.getElementById('cfg-supabase-anon-key').value.trim();
+    const url = rawUrl.replace(/\/+$/, '');
+    const key = rawKey;
 
     if (url && key) {
         localStorage.setItem('supabase_url', url);
         localStorage.setItem('supabase_anon_key', key);
-        initSupabase();
-        fetchAllData();
-        showToast('Supabase settings saved and connected!', 'success');
+        await initSupabase();
+        await fetchAllData();
+        await fetchActivityLogs();
+        showToast('Supabase cloud settings saved and connected!', 'success');
     }
     closeModal('modal-supabase-settings');
 }
@@ -1319,49 +2521,125 @@ function disconnectSupabase() {
     localStorage.removeItem('supabase_url');
     localStorage.removeItem('supabase_anon_key');
     supabaseClient = null;
+    currentAuthUser = null;
     initSupabase();
     fetchAllData();
-    showToast('Disconnected from cloud. Running in local mode.', 'info');
+    showToast('Disconnected from cloud. Running in local storage mode.', 'info');
     closeModal('modal-supabase-settings');
 }
 
 // ==============================================================================
-// 12. EVENT LISTENERS & UI HELPERS
+// 13. EVENT LISTENERS & UI HELPERS
 // ==============================================================================
 function bindEventListeners() {
     // --- Search Input ---
-    document.getElementById('search-input').addEventListener('input', (e) => {
-        activeFilters.search = e.target.value;
-        renderDashboard();
-    });
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            activeFilters.search = e.target.value;
+            renderDashboard();
+        });
+    }
 
     // --- Dropdown Filters ---
-    document.getElementById('filter-customer-type').addEventListener('change', (e) => {
-        activeFilters.customerType = e.target.value;
-        renderDashboard();
-    });
+    const sortFilter = document.getElementById('filter-sort-order');
+    if (sortFilter) {
+        sortFilter.addEventListener('change', (e) => {
+            activeFilters.sortOrder = e.target.value;
+            renderDashboard();
+        });
+    }
 
-    document.getElementById('filter-vehicle-count').addEventListener('change', (e) => {
-        activeFilters.vehicleCount = e.target.value;
-        renderDashboard();
-    });
+    const entryDateFilter = document.getElementById('filter-entry-date');
+    if (entryDateFilter) {
+        entryDateFilter.addEventListener('change', (e) => {
+            activeFilters.entryDate = e.target.value;
+            renderDashboard();
+        });
+    }
 
-    document.getElementById('filter-expiry-warning').addEventListener('change', (e) => {
-        activeFilters.expiryWarning = e.target.value;
-        renderDashboard();
-    });
+    const custTypeFilter = document.getElementById('filter-customer-type');
+    if (custTypeFilter) {
+        custTypeFilter.addEventListener('change', (e) => {
+            activeFilters.customerType = e.target.value;
+            renderDashboard();
+        });
+    }
 
-    document.getElementById('filter-renewal-status').addEventListener('change', (e) => {
-        activeFilters.renewalStatus = e.target.value;
-        renderDashboard();
-    });
+    const vehCountFilter = document.getElementById('filter-vehicle-count');
+    if (vehCountFilter) {
+        vehCountFilter.addEventListener('change', (e) => {
+            activeFilters.vehicleCount = e.target.value;
+            renderDashboard();
+        });
+    }
+
+    const expWarningFilter = document.getElementById('filter-expiry-warning');
+    if (expWarningFilter) {
+        expWarningFilter.addEventListener('change', (e) => {
+            activeFilters.expiryWarning = e.target.value;
+            renderDashboard();
+        });
+    }
+
+    const renStatusFilter = document.getElementById('filter-renewal-status');
+    if (renStatusFilter) {
+        renStatusFilter.addEventListener('change', (e) => {
+            activeFilters.renewalStatus = e.target.value;
+            renderDashboard();
+        });
+    }
+
+    // --- Export Dropdown Menu Toggle ---
+    const btnExportBackup = document.getElementById('btn-export-backup');
+    const exportMenu = document.getElementById('export-dropdown-menu');
+    if (btnExportBackup && exportMenu) {
+        btnExportBackup.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isHidden = exportMenu.style.display === 'none' || exportMenu.style.display === '';
+            exportMenu.style.display = isHidden ? 'flex' : 'none';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.dropdown-action-wrap')) {
+                exportMenu.style.display = 'none';
+            }
+        });
+    }
+
+    const btnExportJSON = document.getElementById('btn-export-json');
+    if (btnExportJSON) {
+        btnExportJSON.addEventListener('click', () => {
+            exportBackupJSON();
+            if (exportMenu) exportMenu.style.display = 'none';
+        });
+    }
+
+    const btnExportCSV = document.getElementById('btn-export-csv');
+    if (btnExportCSV) {
+        btnExportCSV.addEventListener('click', () => {
+            exportBackupCSV();
+            if (exportMenu) exportMenu.style.display = 'none';
+        });
+    }
+
+    // --- Import Modal Trigger ---
+    const btnOpenImport = document.getElementById('btn-open-import');
+    if (btnOpenImport) {
+        btnOpenImport.addEventListener('click', () => {
+            openModal('modal-import-backup');
+        });
+    }
 
     // --- Add Customer Modal Trigger ---
-    document.getElementById('btn-add-customer').addEventListener('click', () => {
-        resetCustomerForm();
-        document.getElementById('modal-form-title').textContent = 'Add Customer & Vehicle Fleet';
-        openModal('modal-customer');
-    });
+    const btnAddCustomer = document.getElementById('btn-add-customer');
+    if (btnAddCustomer) {
+        btnAddCustomer.addEventListener('click', () => {
+            resetCustomerForm();
+            document.getElementById('modal-form-title').textContent = 'Add Customer & Vehicle Fleet';
+            openModal('modal-customer');
+        });
+    }
 
     // --- Dynamic Vehicle Steppers (+ / -) in Modal ---
     const btnIncrement = document.getElementById('btn-stepper-increment');
@@ -1392,31 +2670,73 @@ function bindEventListeners() {
     }
 
     // --- Aadhaar Mask Formatter (XXXX XXXX XXXX) ---
-    document.getElementById('input-aadhar').addEventListener('input', (e) => {
-        let val = e.target.value.replace(/\D/g, '').substring(0, 12);
-        let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
-        e.target.value = formatted;
-    });
+    const inputAadhaar = document.getElementById('input-aadhar');
+    if (inputAadhaar) {
+        inputAadhaar.addEventListener('input', (e) => {
+            let val = e.target.value.replace(/\D/g, '').substring(0, 12);
+            let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
+            e.target.value = formatted;
+        });
+    }
 
     // --- PAN Formatter (ABCDE1234F) ---
-    document.getElementById('input-pan').addEventListener('input', (e) => {
-        e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 10);
-    });
+    const inputPan = document.getElementById('input-pan');
+    if (inputPan) {
+        inputPan.addEventListener('input', (e) => {
+            e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 10);
+        });
+    }
 
     // --- Customer Form Submission ---
-    document.getElementById('customer-form').addEventListener('submit', handleCustomerFormSubmit);
+    const customerForm = document.getElementById('customer-form');
+    if (customerForm) {
+        customerForm.addEventListener('submit', handleCustomerFormSubmit);
+    }
 
     // --- Supabase Config Modal Triggers ---
-    document.getElementById('btn-open-settings').addEventListener('click', () => {
-        document.getElementById('cfg-supabase-url').value = localStorage.getItem('supabase_url') || '';
-        document.getElementById('cfg-supabase-anon-key').value = localStorage.getItem('supabase_anon_key') || '';
-        document.getElementById('supabase-test-feedback').style.display = 'none';
-        openModal('modal-supabase-settings');
-    });
+    const btnOpenSettings = document.getElementById('btn-open-settings');
+    if (btnOpenSettings) {
+        btnOpenSettings.addEventListener('click', () => {
+            document.getElementById('cfg-supabase-url').value = localStorage.getItem('supabase_url') || '';
+            document.getElementById('cfg-supabase-anon-key').value = localStorage.getItem('supabase_anon_key') || '';
+            const feedback = document.getElementById('supabase-test-feedback');
+            if (feedback) feedback.style.display = 'none';
+            openModal('modal-supabase-settings');
+        });
+    }
 
-    document.getElementById('btn-test-supabase').addEventListener('click', testSupabaseConnection);
-    document.getElementById('btn-save-supabase').addEventListener('click', saveSupabaseSettings);
-    document.getElementById('btn-disconnect-supabase').addEventListener('click', disconnectSupabase);
+    const btnTestSupabase = document.getElementById('btn-test-supabase');
+    if (btnTestSupabase) btnTestSupabase.addEventListener('click', testSupabaseConnection);
+
+    const btnSaveSupabase = document.getElementById('btn-save-supabase');
+    if (btnSaveSupabase) btnSaveSupabase.addEventListener('click', saveSupabaseSettings);
+
+    const btnDisconnect = document.getElementById('btn-disconnect-supabase');
+    if (btnDisconnect) btnDisconnect.addEventListener('click', disconnectSupabase);
+
+    // --- Supabase Auth Triggers ---
+    const btnNavLogin = document.getElementById('btn-nav-login');
+    if (btnNavLogin) {
+        btnNavLogin.addEventListener('click', () => {
+            const feedback = document.getElementById('auth-feedback');
+            if (feedback) feedback.style.display = 'none';
+            openModal('modal-auth');
+        });
+    }
+
+    const btnNavLogout = document.getElementById('btn-nav-logout');
+    if (btnNavLogout) {
+        btnNavLogout.addEventListener('click', handleAuthSignOut);
+    }
+
+    const formSignIn = document.getElementById('form-auth-signin');
+    if (formSignIn) formSignIn.addEventListener('submit', handleAuthSignIn);
+
+    const formSignUp = document.getElementById('form-auth-signup');
+    if (formSignUp) formSignUp.addEventListener('submit', handleAuthSignUp);
+
+    const formReset = document.getElementById('form-auth-reset');
+    if (formReset) formReset.addEventListener('submit', handleAuthResetPassword);
 
     // --- Modal Closers ---
     document.querySelectorAll('.close-modal').forEach(btn => {
@@ -1433,18 +2753,242 @@ function bindEventListeners() {
     });
 
     // --- Theme Toggle ---
-    document.getElementById('btn-theme-toggle').addEventListener('click', toggleTheme);
+    const btnTheme = document.getElementById('btn-theme-toggle');
+    if (btnTheme) btnTheme.addEventListener('click', toggleTheme);
+}
+
+// ==============================================================================
+// 14. SUPABASE AUTH HANDLERS & TAB MANAGEMENT
+// ==============================================================================
+function setupAuthTabsAndToggles() {
+    const tabSignIn = document.getElementById('tab-auth-signin');
+    const tabSignUp = document.getElementById('tab-auth-signup');
+    const tabReset = document.getElementById('tab-auth-reset');
+
+    const formSignIn = document.getElementById('form-auth-signin');
+    const formSignUp = document.getElementById('form-auth-signup');
+    const formReset = document.getElementById('form-auth-reset');
+    const authFeedback = document.getElementById('auth-feedback');
+
+    function switchAuthTab(activeTab, activeForm) {
+        [tabSignIn, tabSignUp, tabReset].forEach(t => t && t.classList.remove('active'));
+        [formSignIn, formSignUp, formReset].forEach(f => f && (f.style.display = 'none'));
+        if (activeTab) activeTab.classList.add('active');
+        if (activeForm) activeForm.style.display = 'block';
+        if (authFeedback) authFeedback.style.display = 'none';
+    }
+
+    if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab(tabSignIn, formSignIn));
+    if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab(tabSignUp, formSignUp));
+    if (tabReset) tabReset.addEventListener('click', () => switchAuthTab(tabReset, formReset));
+
+    // Password visibility eye buttons
+    document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetId = btn.getAttribute('data-target');
+            const targetInput = document.getElementById(targetId);
+            if (targetInput) {
+                const isPassword = targetInput.getAttribute('type') === 'password';
+                targetInput.setAttribute('type', isPassword ? 'text' : 'password');
+                btn.style.opacity = isPassword ? '1' : '0.6';
+            }
+        });
+    });
+}
+
+async function handleAuthSignIn(e) {
+    e.preventDefault();
+    if (!supabaseClient) {
+        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
+        openModal('modal-supabase-settings');
+        return;
+    }
+
+    const email = document.getElementById('auth-signin-email').value.trim();
+    const password = document.getElementById('auth-signin-password').value;
+    const submitBtn = document.getElementById('btn-auth-signin-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Signing in...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
+            email: email,
+            password: password
+        });
+
+        if (error) throw error;
+
+        currentAuthUser = data.user;
+        if (feedback) {
+            feedback.className = 'status-feedback badge-success';
+            feedback.textContent = `✅ Welcome, ${data.user.email}!`;
+            feedback.style.display = 'block';
+        }
+
+        showToast(`Signed in successfully as ${data.user.email}`, 'success');
+        setTimeout(() => {
+            closeModal('modal-auth');
+            document.getElementById('form-auth-signin').reset();
+        }, 600);
+    } catch (err) {
+        console.error('Sign In Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message || 'Invalid login credentials'}`;
+            feedback.style.display = 'block';
+        }
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Sign In to Dashboard</span>';
+    }
+}
+
+async function handleAuthSignUp(e) {
+    e.preventDefault();
+    if (!supabaseClient) {
+        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
+        openModal('modal-supabase-settings');
+        return;
+    }
+
+    const fullName = document.getElementById('auth-signup-fullname').value.trim();
+    const email = document.getElementById('auth-signup-email').value.trim();
+    const password = document.getElementById('auth-signup-password').value;
+    const confirmPassword = document.getElementById('auth-signup-confirm').value;
+    const submitBtn = document.getElementById('btn-auth-signup-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    if (password !== confirmPassword) {
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = '❌ Passwords do not match. Please recheck.';
+            feedback.style.display = 'block';
+        }
+        return;
+    }
+
+    if (password.length < 6) {
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = '❌ Password must be at least 6 characters.';
+            feedback.style.display = 'block';
+        }
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Creating account...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        const { data, error } = await supabaseClient.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: { full_name: fullName }
+            }
+        });
+
+        if (error) throw error;
+
+        if (feedback) {
+            feedback.className = 'status-feedback badge-success';
+            if (data.session) {
+                feedback.textContent = '✅ Account created and signed in!';
+                showToast('Account registered successfully!', 'success');
+                setTimeout(() => {
+                    closeModal('modal-auth');
+                    document.getElementById('form-auth-signup').reset();
+                }, 800);
+            } else {
+                feedback.textContent = '✅ Account created! Please check your email to confirm registration or sign in.';
+                showToast('Account created! Please check your email.', 'info');
+            }
+            feedback.style.display = 'block';
+        }
+    } catch (err) {
+        console.error('Sign Up Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message}`;
+            feedback.style.display = 'block';
+        }
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Register Staff Account</span>';
+    }
+}
+
+async function handleAuthResetPassword(e) {
+    e.preventDefault();
+    if (!supabaseClient) {
+        showToast('Please configure Supabase URL & Anon Key first.', 'warning');
+        openModal('modal-supabase-settings');
+        return;
+    }
+
+    const email = document.getElementById('auth-reset-email').value.trim();
+    const submitBtn = document.getElementById('btn-auth-reset-submit');
+    const feedback = document.getElementById('auth-feedback');
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '⏳ Sending reset link...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+            redirectTo: window.location.href
+        });
+
+        if (error) throw error;
+
+        if (feedback) {
+            feedback.className = 'status-feedback badge-success';
+            feedback.textContent = `✅ Password recovery link sent to ${email}. Please check your inbox.`;
+            feedback.style.display = 'block';
+        }
+        showToast('Password reset link sent!', 'info');
+    } catch (err) {
+        console.error('Password Reset Error:', err);
+        if (feedback) {
+            feedback.className = 'status-feedback badge-danger';
+            feedback.textContent = `❌ ${err.message}`;
+            feedback.style.display = 'block';
+        }
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Send Password Reset Link</span>';
+    }
+}
+
+async function handleAuthSignOut() {
+    if (!supabaseClient) return;
+    try {
+        await supabaseClient.auth.signOut();
+        currentAuthUser = null;
+        userRole = 'admin'; // local fallback
+        showToast('Signed out from Supabase Cloud.', 'info');
+        await fetchAllData();
+        await fetchActivityLogs();
+    } catch (err) {
+        console.error('Sign Out Error:', err);
+    }
 }
 
 function resetCustomerForm() {
     const form = document.getElementById('customer-form');
-    form.reset();
+    if (form) form.reset();
     document.getElementById('form-customer-id').value = '';
     document.getElementById('input-existing-aadhar-url').value = '';
     document.getElementById('input-existing-pan-url').value = '';
     document.getElementById('input-existing-insurance-url').value = '';
     document.getElementById('input-existing-puc-url').value = '';
-    document.getElementById('type-permanent').checked = true;
+    document.getElementById('input-customer-puc-date').value = '';
+    const permRadio = document.getElementById('type-permanent');
+    if (permRadio) permRadio.checked = true;
 
     formAadhaarDoc = { file: null, previewUrl: null, name: '', isImage: false };
     formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
@@ -1461,11 +3005,13 @@ function resetCustomerForm() {
 }
 
 function openModal(id) {
-    document.getElementById(id).classList.add('show');
+    const el = document.getElementById(id);
+    if (el) el.classList.add('show');
 }
 
 function closeModal(id) {
-    document.getElementById(id).classList.remove('show');
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('show');
 }
 
 function escapeHtml(str) {
@@ -1494,17 +3040,18 @@ function updateThemeIcons(theme) {
     const moon = document.getElementById('icon-moon');
     const sun = document.getElementById('icon-sun');
     if (theme === 'dark') {
-        sun.style.display = 'block';
-        moon.style.display = 'none';
+        if (sun) sun.style.display = 'block';
+        if (moon) moon.style.display = 'none';
     } else {
-        sun.style.display = 'none';
-        moon.style.display = 'block';
+        if (sun) sun.style.display = 'none';
+        if (moon) moon.style.display = 'block';
     }
 }
 
 // --- Toast Notifications ---
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
+    if (!container) return;
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 
