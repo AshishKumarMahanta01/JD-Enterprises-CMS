@@ -864,7 +864,7 @@ function resetAllFilters() {
 }
 
 // ==============================================================================
-// 7. MAIN TABLE RENDERING (WITH AUTH LOCKDOWN ON ACTIONS)
+// 7. MAIN TABLE RENDERING (WITH AUTH LOCKDOWN ON ACTIONS & SENSITIVE DATA)
 // ==============================================================================
 function renderDashboard() {
     updateKPIAnalytics();
@@ -928,83 +928,161 @@ function renderDashboard() {
     filtered.forEach((c, index) => {
         const tr = document.createElement('tr');
 
-        // Customer Type Badge
-        const typeBadge = c.type === 'permanent'
-            ? '<span class="badge badge-permanent">⭐ Permanent</span>'
-            : '<span class="badge badge-lead">🚶 Walk-in Lead</span>';
+        // 1. Customer Type Badge
+        const typeBadge = loggedIn
+            ? (c.type === 'permanent'
+                ? '<span class="badge badge-permanent">⭐ Permanent</span>'
+                : '<span class="badge badge-lead">🚶 Walk-in Lead</span>')
+            : '<span class="badge badge-locked locked-trigger" data-action="view customer category details" title="🔒 Sign in to view customer category">🔒 Restricted</span>';
 
-        // Primary Insurance Policy & Expiry
+        // 2. Primary Insurance Policy & Expiry
         const policyNum = c.insurance_policy?.policy_number || '—';
         const primaryInsExpiry = c.insurance_policy?.insurance_expiry_date;
         const primaryInsDays = calculateDaysRemaining(primaryInsExpiry);
         const primaryInsBadge = getExpiryBadge(primaryInsDays);
 
-        // Vehicles & Individual Dates Box
-        const vCount = (c.vehicles && c.vehicles.length) || 0;
-        let vehiclesHtml = '';
-
-        if (vCount > 0) {
-            const vehicleRowsHtml = c.vehicles.map((v, i) => {
-                const vInsDays = calculateDaysRemaining(v.insurance_expiry_date);
-                const vInsBadge = getExpiryBadge(vInsDays);
-                const vPucDays = calculateDaysRemaining(v.puc_expiry_date);
-                const vPucBadge = getExpiryBadge(vPucDays);
-
-                let buttons = '';
-                if (v.rc_document_url) {
-                    buttons += `<button type="button" class="table-doc-pill pill-rc preview-any-doc-btn" data-doc-url="${escapeHtml(v.rc_document_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} RC (${escapeHtml(v.vehicle_number)})" title="Preview RC">🚗 RC</button> `;
-                }
-                if (v.insurance_doc_url) {
-                    buttons += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(v.insurance_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} Insurance Doc" title="Preview Vehicle Ins. Doc">📄 Ins</button> `;
-                }
-                if (v.puc_doc_url) {
-                    buttons += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(v.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} PUC Doc" title="Preview Vehicle PUC Doc">💨 PUC</button> `;
-                }
-
-                return `
-                    <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:0.4rem 0.55rem; margin-bottom:0.35rem;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem;">
-                            <span class="plate-tag">${escapeHtml(v.vehicle_number || `Vehicle #${i + 1}`)}</span>
-                            <div style="display:flex; gap:0.25rem;">${buttons}</div>
-                        </div>
-                        <div style="display:flex; flex-wrap:wrap; gap:0.4rem; font-size:0.7rem; margin-top:0.25rem;">
-                            <span>Ins: <strong>${formatDate(v.insurance_expiry_date)}</strong> <span class="badge ${vInsBadge.badgeClass}" style="padding:0.1rem 0.35rem; font-size:0.65rem;">${vInsBadge.label}</span></span>
-                            <span>PUC: <strong>${formatDate(v.puc_expiry_date)}</strong> <span class="badge ${vPucBadge.badgeClass}" style="padding:0.1rem 0.35rem; font-size:0.65rem;">${vPucBadge.label}</span></span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            vehiclesHtml = `
-                <div class="fleet-cell-box">
-                    <span class="fleet-count-badge">🚗 ${vCount} ${vCount === 1 ? 'Vehicle' : 'Vehicles'}</span>
-                    <div style="margin-top:0.25rem;">${vehicleRowsHtml}</div>
+        let primaryPolicyHtml = '';
+        if (loggedIn) {
+            primaryPolicyHtml = `
+                <div style="display:flex; flex-direction:column; gap:0.2rem;">
+                    <span style="font-family:var(--font-mono); font-weight:700; font-size:0.78rem;">${escapeHtml(policyNum)}</span>
+                    <span style="font-size:0.75rem; color:var(--text-muted);">${formatDate(primaryInsExpiry)}</span>
+                    <span class="badge ${primaryInsBadge.badgeClass}">${primaryInsBadge.label}</span>
                 </div>
             `;
         } else {
-            vehiclesHtml = '<span style="color:var(--text-muted); font-size:0.75rem;">No Vehicles</span>';
+            primaryPolicyHtml = `
+                <div style="display:flex; flex-direction:column; gap:0.25rem;">
+                    <button type="button" class="table-doc-pill pill-locked locked-trigger" data-action="view primary insurance policy number and expiry dates" title="🔒 Sign in to view policy details">🔒 Policy & Expiry Locked</button>
+                </div>
+            `;
         }
 
-        // Documents Attached Pill List
+        // 3. Vehicles & Individual Dates Box
+        const vCount = (c.vehicles && c.vehicles.length) || 0;
+        let vehiclesHtml = '';
+
+        if (loggedIn) {
+            if (vCount > 0) {
+                const vehicleRowsHtml = c.vehicles.map((v, i) => {
+                    const vInsDays = calculateDaysRemaining(v.insurance_expiry_date);
+                    const vInsBadge = getExpiryBadge(vInsDays);
+                    const vPucDays = calculateDaysRemaining(v.puc_expiry_date);
+                    const vPucBadge = getExpiryBadge(vPucDays);
+
+                    let buttons = '';
+                    if (v.rc_document_url) {
+                        buttons += `<button type="button" class="table-doc-pill pill-rc preview-any-doc-btn" data-doc-url="${escapeHtml(v.rc_document_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} RC (${escapeHtml(v.vehicle_number)})" title="Preview RC">🚗 RC</button> `;
+                    }
+                    if (v.insurance_doc_url) {
+                        buttons += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(v.insurance_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} Insurance Doc" title="Preview Vehicle Ins. Doc">📄 Ins</button> `;
+                    }
+                    if (v.puc_doc_url) {
+                        buttons += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(v.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} PUC Doc" title="Preview Vehicle PUC Doc">💨 PUC</button> `;
+                    }
+
+                    return `
+                        <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:0.4rem 0.55rem; margin-bottom:0.35rem;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.4rem;">
+                                <span class="plate-tag">${escapeHtml(v.vehicle_number || `Vehicle #${i + 1}`)}</span>
+                                <div style="display:flex; gap:0.25rem;">${buttons}</div>
+                            </div>
+                            <div style="display:flex; flex-wrap:wrap; gap:0.4rem; font-size:0.7rem; margin-top:0.25rem;">
+                                <span>Ins: <strong>${formatDate(v.insurance_expiry_date)}</strong> <span class="badge ${vInsBadge.badgeClass}" style="padding:0.1rem 0.35rem; font-size:0.65rem;">${vInsBadge.label}</span></span>
+                                <span>PUC: <strong>${formatDate(v.puc_expiry_date)}</strong> <span class="badge ${vPucBadge.badgeClass}" style="padding:0.1rem 0.35rem; font-size:0.65rem;">${vPucBadge.label}</span></span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                vehiclesHtml = `
+                    <div class="fleet-cell-box">
+                        <span class="fleet-count-badge">🚗 ${vCount} ${vCount === 1 ? 'Vehicle' : 'Vehicles'}</span>
+                        <div style="margin-top:0.25rem;">${vehicleRowsHtml}</div>
+                    </div>
+                `;
+            } else {
+                vehiclesHtml = '<span style="color:var(--text-muted); font-size:0.75rem;">No Vehicles</span>';
+            }
+        } else {
+            // Guest mode: Vehicles plate & individual expiry are locked
+            if (vCount > 0) {
+                vehiclesHtml = `
+                    <div class="fleet-cell-box">
+                        <span class="fleet-count-badge">🚗 ${vCount} ${vCount === 1 ? 'Vehicle' : 'Vehicles'}</span>
+                        <button type="button" class="table-doc-pill pill-locked locked-trigger" data-action="view vehicle plate numbers, RC documents, and individual insurance & PUC expiry dates" title="🔒 Sign in to view vehicle fleet details" style="margin-top:0.25rem;">
+                            🔒 Plates & Expiry Locked
+                        </button>
+                    </div>
+                `;
+            } else {
+                vehiclesHtml = '<span style="color:var(--text-muted); font-size:0.75rem;">No Vehicles</span>';
+            }
+        }
+
+        // 4. Documents Attached Pill List
         let docPillsHtml = '';
-        if (c.aadhar_doc_url) {
-            docPillsHtml += `<button type="button" class="table-doc-pill pill-aadhar preview-any-doc-btn" data-doc-url="${escapeHtml(c.aadhar_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Aadhaar Card" title="Preview / Download Aadhaar">🆔 Aadhaar</button> `;
-        }
-        if (c.pan_doc_url) {
-            docPillsHtml += `<button type="button" class="table-doc-pill pill-pan preview-any-doc-btn" data-doc-url="${escapeHtml(c.pan_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — PAN Card" title="Preview / Download PAN">💳 PAN</button> `;
-        }
-        if (c.insurance_policy?.policy_doc_url) {
-            docPillsHtml += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(c.insurance_policy.policy_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Primary Insurance Policy" title="Preview / Download Policy">📄 Primary Policy</button> `;
-        }
-        if (c.puc_doc_url) {
-            docPillsHtml += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(c.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — General PUC Certificate" title="Preview / Download PUC">💨 General PUC</button> `;
+        if (loggedIn) {
+            if (c.aadhar_doc_url) {
+                docPillsHtml += `<button type="button" class="table-doc-pill pill-aadhar preview-any-doc-btn" data-doc-url="${escapeHtml(c.aadhar_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Aadhaar Card" title="Preview / Download Aadhaar">🆔 Aadhaar</button> `;
+            }
+            if (c.pan_doc_url) {
+                docPillsHtml += `<button type="button" class="table-doc-pill pill-pan preview-any-doc-btn" data-doc-url="${escapeHtml(c.pan_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — PAN Card" title="Preview / Download PAN">💳 PAN</button> `;
+            }
+            if (c.insurance_policy?.policy_doc_url) {
+                docPillsHtml += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(c.insurance_policy.policy_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Primary Insurance Policy" title="Preview / Download Policy">📄 Primary Policy</button> `;
+            }
+            if (c.puc_doc_url) {
+                docPillsHtml += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(c.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — General PUC Certificate" title="Preview / Download PUC">💨 General PUC</button> `;
+            }
+
+            if (!docPillsHtml) {
+                docPillsHtml = '<span style="color:var(--text-muted); font-size:0.72rem; font-style:italic;">No KYC Files</span>';
+            }
+        } else {
+            docPillsHtml = `<button type="button" class="table-doc-pill pill-locked locked-trigger" data-action="view and download attached customer documents" title="🔒 Sign in to view documents">🔒 Login to View Docs</button>`;
         }
 
-        if (!docPillsHtml) {
-            docPillsHtml = '<span style="color:var(--text-muted); font-size:0.72rem; font-style:italic;">No KYC Files</span>';
+        // 5. Phone & KYC Cells
+        let phoneHtml = '';
+        let kycHtml = '';
+        if (loggedIn) {
+            phoneHtml = `<span class="customer-phone">${escapeHtml(c.phone || 'No Phone')}</span>`;
+            kycHtml = `
+                <div class="kyc-badge-list">
+                    <span class="kyc-item" title="PAN Number">💳 ${escapeHtml(c.pan_number || 'No PAN')}</span>
+                    <span class="kyc-item" title="Aadhaar Number">🆔 ${escapeHtml(c.aadhar_number || 'No Aadhaar')}</span>
+                </div>
+            `;
+        } else {
+            phoneHtml = `<span class="customer-phone phone-locked locked-trigger" data-action="view customer phone number" title="🔒 Sign in to view phone number">🔒 ••••••••••</span>`;
+            kycHtml = `
+                <div class="kyc-badge-list">
+                    <button type="button" class="table-doc-pill pill-locked locked-trigger" data-action="view PAN and Aadhaar KYC details" title="🔒 Sign in to view KYC details">🔒 KYC Restricted</button>
+                </div>
+            `;
         }
 
-        // Inline Action: Renewal Status Dropdown (locked if not logged in)
+        // 6. Creator / Audit Tag
+        const creatorName = c.created_by_name || c.created_by_email || 'Staff';
+        const createdDate = formatDate(c.created_at);
+        let auditTagHtml = '';
+        if (loggedIn) {
+            auditTagHtml = `
+                <div class="staff-audit-tag">
+                    <span>👤 Added by: <strong>${escapeHtml(creatorName)}</strong></span>
+                    <span class="staff-audit-time">${createdDate}</span>
+                </div>
+            `;
+        } else {
+            auditTagHtml = `
+                <div class="staff-audit-tag locked-tag">
+                    <span>🔒 Staff Audit Protected</span>
+                </div>
+            `;
+        }
+
+        // 7. Inline Renewal Status
         const currentStatus = c.insurance_policy?.status || 'pending';
         const statusSelectHtml = loggedIn
             ? `<select class="inline-action-select status-${currentStatus}" data-customer-id="${c.id}" aria-label="Change policy status">
@@ -1012,27 +1090,23 @@ function renderDashboard() {
                    <option value="completed" ${currentStatus === 'completed' ? 'selected' : ''}>✅ Completed</option>
                    <option value="not_done" ${currentStatus === 'not_done' ? 'selected' : ''}>❌ Not Done</option>
                </select>`
-            : `<button type="button" class="btn-sm btn-secondary locked-status-btn" data-customer-id="${c.id}" title="Sign in to modify policy status" style="font-size:0.75rem; padding:0.25rem 0.5rem; display:inline-flex; align-items:center; gap:0.25rem;">
-                   <span>🔒 ${currentStatus === 'completed' ? '✅ Completed' : currentStatus === 'not_done' ? '❌ Not Done' : '⏳ Pending'}</span>
+            : `<button type="button" class="btn-sm btn-secondary locked-status-btn locked-trigger" data-action="change policy renewal status" title="Sign in to modify policy status" style="font-size:0.75rem; padding:0.25rem 0.5rem; display:inline-flex; align-items:center; gap:0.25rem;">
+                   <span>🔒 Restricted</span>
                </button>`;
 
-        // Staff Creator Audit Tag
-        const creatorName = c.created_by_name || c.created_by_email || 'Staff';
-        const createdDate = formatDate(c.created_at);
-
-        // Edit Button (Locked to Login)
+        // 8. Edit Button (Locked to Login)
         const editButtonHtml = loggedIn
             ? `<button type="button" class="btn-icon btn-edit" data-id="${c.id}" title="Edit Customer & Vehicles" aria-label="Edit record">
                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
                </button>`
-            : `<button type="button" class="btn-icon locked-edit-btn" data-id="${c.id}" title="🔒 Sign in to edit record" aria-label="Sign in to edit">
+            : `<button type="button" class="btn-icon locked-edit-btn locked-trigger" data-id="${c.id}" data-action="edit customer and vehicle records" title="🔒 Sign in to edit record" aria-label="Sign in to edit">
                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                </button>`;
 
-        // Delete Button: Allowed only for Admin role when logged in
+        // 9. Delete Button: Allowed only for Admin role when logged in
         let deleteButtonHtml = '';
         if (!loggedIn) {
-            deleteButtonHtml = `<button type="button" class="btn-icon locked-delete-btn" title="🔒 Sign in required to delete" aria-label="Sign in to delete">
+            deleteButtonHtml = `<button type="button" class="btn-icon locked-delete-btn locked-trigger" data-action="delete customer records" title="🔒 Sign in required to delete" aria-label="Sign in to delete">
                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                </button>`;
         } else if (userRole === 'admin') {
@@ -1040,7 +1114,7 @@ function renderDashboard() {
                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
                </button>`;
         } else {
-            deleteButtonHtml = `<button type="button" class="btn-icon" style="opacity:0.4; cursor:not-allowed;" title="Delete locked to Admin only" disabled>
+            deleteButtonHtml = `<button type="button" class="btn-icon" style="opacity:0.4; cursor:not-allowed;" title="Delete locked to Admin role only" disabled>
                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                </button>`;
         }
@@ -1052,31 +1126,17 @@ function renderDashboard() {
             <td>
                 <div class="customer-cell">
                     <span class="customer-name">${escapeHtml(c.full_name)}</span>
-                    <span class="customer-phone">${escapeHtml(c.phone)}</span>
-                    <div class="staff-audit-tag">
-                        <span>👤 Added by: <strong>${escapeHtml(creatorName)}</strong></span>
-                        <span class="staff-audit-time">${createdDate}</span>
-                    </div>
+                    ${phoneHtml}
+                    ${auditTagHtml}
                 </div>
             </td>
-            <td>
-                <div class="kyc-badge-list">
-                    <span class="kyc-item" title="PAN Number">💳 ${escapeHtml(c.pan_number || 'No PAN')}</span>
-                    <span class="kyc-item" title="Aadhaar Number">🆔 ${escapeHtml(c.aadhar_number || 'No Aadhaar')}</span>
-                </div>
-            </td>
+            <td>${kycHtml}</td>
             <td>
                 <div class="doc-tags-wrap">${docPillsHtml}</div>
             </td>
             <td>${typeBadge}</td>
             <td>${vehiclesHtml}</td>
-            <td>
-                <div style="display:flex; flex-direction:column; gap:0.2rem;">
-                    <span style="font-family:var(--font-mono); font-weight:700; font-size:0.78rem;">${escapeHtml(policyNum)}</span>
-                    <span style="font-size:0.75rem; color:var(--text-muted);">${formatDate(primaryInsExpiry)}</span>
-                    <span class="badge ${primaryInsBadge.badgeClass}">${primaryInsBadge.label}</span>
-                </div>
-            </td>
+            <td>${primaryPolicyHtml}</td>
             <td>${statusSelectHtml}</td>
             <td>
                 <div class="table-actions">
@@ -1106,23 +1166,26 @@ function attachTableDynamicEvents() {
         });
     });
 
-    // Locked status button trigger (Guest mode)
-    document.querySelectorAll('.locked-status-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            requireAuth('change policy renewal status');
+    // 2. All Locked Triggers (Guest mode clicks)
+    document.querySelectorAll('.locked-trigger').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const action = e.currentTarget.dataset.action || 'view confidential customer details';
+            requireAuth(action);
         });
     });
 
-    // 2. Universal Preview from any Document Badge (Available in all modes)
+    // 3. Universal Preview from any Document Badge (Available in authenticated mode)
     document.querySelectorAll('.preview-any-doc-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!requireAuth('view or download attached documents')) return;
             const url = e.currentTarget.dataset.docUrl;
             const title = e.currentTarget.dataset.docTitle || 'Document Preview';
             openDocumentViewer(url, title);
         });
     });
 
-    // 3. Edit Buttons
+    // 4. Edit Buttons (Authenticated Staff / Admin)
     document.querySelectorAll('.btn-edit').forEach(btn => {
         btn.addEventListener('click', (e) => {
             if (!requireAuth('edit customer and vehicle records')) return;
@@ -1131,24 +1194,16 @@ function attachTableDynamicEvents() {
         });
     });
 
-    document.querySelectorAll('.locked-edit-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            requireAuth('edit customer and vehicle records');
-        });
-    });
-
-    // 4. Delete Buttons
+    // 5. Delete Buttons (Admin role only)
     document.querySelectorAll('.btn-delete').forEach(btn => {
         btn.addEventListener('click', (e) => {
             if (!requireAuth('delete records')) return;
+            if (userRole !== 'admin') {
+                showToast('🔒 Admin role authorization required to delete customer records.', 'warning');
+                return;
+            }
             const id = e.currentTarget.dataset.id;
             handleDeleteCustomer(id);
-        });
-    });
-
-    document.querySelectorAll('.locked-delete-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            requireAuth('delete customer records');
         });
     });
 }
@@ -2045,6 +2100,7 @@ function setupActivityTrackerEvents() {
 
     if (btnOpen) {
         btnOpen.addEventListener('click', async () => {
+            if (!requireAuth('view date-wise activity logs and staff audit trail')) return;
             await fetchActivityLogs();
             renderActivityTracker('all');
             openModal('modal-activity-tracker');
@@ -2079,14 +2135,16 @@ function setupActivityTrackerEvents() {
 }
 
 // ==============================================================================
-// 12. MANUAL BACKUP: EXPORT & IMPORT ENGINE (AUTHENTICATION ENFORCED FOR RESTORE)
+// 12. MANUAL BACKUP: EXPORT & IMPORT ENGINE (AUTHENTICATION ENFORCED)
 // ==============================================================================
 function exportBackupJSON() {
+    if (!requireAuth('export full database backup')) return;
+
     const backupObj = {
         version: "2.0",
         app_name: "JD ENTERPRISES CMS Monitor",
         exported_at: new Date().toISOString(),
-        exported_by: currentAuthUser?.email || 'guest_user',
+        exported_by: currentAuthUser?.email || 'authenticated_staff',
         total_customers: customersData.length,
         customers: customersData,
         activity_logs: activityLogs
@@ -2104,6 +2162,8 @@ function exportBackupJSON() {
 }
 
 function exportBackupCSV() {
+    if (!requireAuth('export customer and fleet spreadsheet')) return;
+
     if (customersData.length === 0) {
         showToast('No customer records found to export.', 'warning');
         return;
@@ -2521,8 +2581,10 @@ function setupBackupDropzone() {
     }
 }
 
-// Universal Document Viewer Modal
+// Universal Document Viewer Modal (Authentication Enforced)
 function openDocumentViewer(url, title) {
+    if (!requireAuth('view or download attached documents')) return;
+
     if (!url) {
         showToast('No document attachment available to preview.', 'warning');
         return;
@@ -3020,6 +3082,7 @@ function bindEventListeners() {
     if (btnExportBackup && exportMenu) {
         btnExportBackup.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (!requireAuth('export customer database backups')) return;
             const isHidden = exportMenu.style.display === 'none' || exportMenu.style.display === '';
             exportMenu.style.display = isHidden ? 'flex' : 'none';
         });
@@ -3034,6 +3097,7 @@ function bindEventListeners() {
     const btnExportJSON = document.getElementById('btn-export-json');
     if (btnExportJSON) {
         btnExportJSON.addEventListener('click', () => {
+            if (!requireAuth('export database backup')) return;
             exportBackupJSON();
             if (exportMenu) exportMenu.style.display = 'none';
         });
@@ -3042,6 +3106,7 @@ function bindEventListeners() {
     const btnExportCSV = document.getElementById('btn-export-csv');
     if (btnExportCSV) {
         btnExportCSV.addEventListener('click', () => {
+            if (!requireAuth('export database backup')) return;
             exportBackupCSV();
             if (exportMenu) exportMenu.style.display = 'none';
         });
@@ -3131,6 +3196,7 @@ function bindEventListeners() {
     const btnOpenSettings = document.getElementById('btn-open-settings');
     if (btnOpenSettings) {
         btnOpenSettings.addEventListener('click', () => {
+            if (!requireAuth('configure database connection settings')) return;
             document.getElementById('cfg-supabase-url').value = localStorage.getItem('supabase_url') || '';
             document.getElementById('cfg-supabase-anon-key').value = localStorage.getItem('supabase_anon_key') || '';
             const feedback = document.getElementById('supabase-test-feedback');

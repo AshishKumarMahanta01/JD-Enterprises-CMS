@@ -1822,3 +1822,114 @@ input:focus {
   margin-bottom: 1rem;
 }
 
+/* Strict Privacy / Unauthenticated Locked States */
+.pill-locked {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning);
+  border: 1px dashed rgba(245, 158, 11, 0.45);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.pill-locked:hover {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: var(--warning);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.badge-locked {
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--text-muted);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.badge-locked:hover {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.phone-locked {
+  cursor: pointer;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+}
+
+.phone-locked:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.locked-tag {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-style: italic;
+}
+
+.locked-fleet-btn {
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.45rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.locked-fleet-btn:hover {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: var(--warning);
+  transform: translateY(-1px);
+}
+
+.locked-status-btn {
+  cursor: pointer;
+  opacity: 0.9;
+  transition: all var(--transition-fast);
+}
+
+.locked-status-btn:hover {
+  opacity: 1;
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.locked-edit-btn, .locked-delete-btn {
+  opacity: 0.65;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.locked-edit-btn:hover, .locked-delete-btn:hover {
+  opacity: 1;
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.locked-trigger {
+  cursor: pointer;
+}
+
+
