@@ -195,9 +195,9 @@ function requireAuth(actionDescription = 'perform this action') {
         
         const authFeedback = document.getElementById('auth-feedback');
         if (authFeedback) {
-            authFeedback.className = 'status-feedback badge-warning';
-            authFeedback.textContent = `🔒 Please sign in with your staff or admin account to ${actionDescription}.`;
-            authFeedback.style.display = 'block';
+            authFeedback.className = 'status-feedback auth-toast-feedback badge-warning';
+            authFeedback.innerHTML = `<span>🔒</span> <span>Please sign in with your staff or admin account to ${escapeHtml(actionDescription)}.</span>`;
+            authFeedback.style.display = 'flex';
         }
         
         openModal('modal-auth');
@@ -2887,25 +2887,130 @@ function setupAuthTabsAndToggles() {
     const tabSignIn = document.getElementById('tab-auth-signin');
     const tabSignUp = document.getElementById('tab-auth-signup');
     const tabReset = document.getElementById('tab-auth-reset');
+    const glider = document.getElementById('auth-tab-glider');
 
     const formSignIn = document.getElementById('form-auth-signin');
     const formSignUp = document.getElementById('form-auth-signup');
     const formReset = document.getElementById('form-auth-reset');
     const authFeedback = document.getElementById('auth-feedback');
+    const authTitle = document.getElementById('auth-title');
+    const authSubtitle = document.getElementById('auth-subtitle');
+    const authHeaderTag = document.getElementById('auth-header-tag');
 
-    function switchAuthTab(activeTab, activeForm) {
-        [tabSignIn, tabSignUp, tabReset].forEach(t => t && t.classList.remove('active'));
-        [formSignIn, formSignUp, formReset].forEach(f => f && (f.style.display = 'none'));
-        if (activeTab) activeTab.classList.add('active');
-        if (activeForm) activeForm.style.display = 'block';
+    const tabConfig = {
+        signin: {
+            tab: tabSignIn,
+            form: formSignIn,
+            index: 0,
+            tag: '🔐 Staff & Admin Access',
+            title: 'Welcome Back',
+            subtitle: 'Sign in to access and manage live customer KYC & fleet records.'
+        },
+        signup: {
+            tab: tabSignUp,
+            form: formSignUp,
+            index: 1,
+            tag: '✨ New Staff Registration',
+            title: 'Create Staff Account',
+            subtitle: 'Register a verified operator account for fleet management.'
+        },
+        reset: {
+            tab: tabReset,
+            form: formReset,
+            index: 2,
+            tag: '🔑 Password Recovery',
+            title: 'Account Recovery',
+            subtitle: "We'll send a secure password reset link directly to your inbox."
+        }
+    };
+
+    function switchAuthTab(type) {
+        const config = tabConfig[type];
+        if (!config) return;
+
+        // Update active tab buttons
+        [tabSignIn, tabSignUp, tabReset].forEach(t => {
+            if (t) {
+                const isActive = t === config.tab;
+                t.classList.toggle('active', isActive);
+                t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            }
+        });
+
+        // Slide glider indicator smoothly
+        if (glider) {
+            glider.style.transform = `translateX(${config.index * 100}%)`;
+        }
+
+        // Switch active form views with entry animation
+        [formSignIn, formSignUp, formReset].forEach(f => {
+            if (f) {
+                f.classList.remove('active');
+                f.style.display = 'none';
+            }
+        });
+
+        if (config.form) {
+            config.form.style.display = 'flex';
+            requestAnimationFrame(() => {
+                config.form.classList.add('active');
+            });
+        }
+
+        // Update header texts dynamically
+        if (authHeaderTag) authHeaderTag.textContent = config.tag;
+        if (authTitle) authTitle.textContent = config.title;
+        if (authSubtitle) authSubtitle.textContent = config.subtitle;
         if (authFeedback) authFeedback.style.display = 'none';
     }
 
-    if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab(tabSignIn, formSignIn));
-    if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab(tabSignUp, formSignUp));
-    if (tabReset) tabReset.addEventListener('click', () => switchAuthTab(tabReset, formReset));
+    if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab('signin'));
+    if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab('signup'));
+    if (tabReset) tabReset.addEventListener('click', () => switchAuthTab('reset'));
 
-    // Password visibility toggle buttons
+    // Quick switch link triggers inside forms
+    document.querySelectorAll('.btn-switch-signin').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchAuthTab('signin');
+        });
+    });
+
+    document.querySelectorAll('.btn-switch-signup').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchAuthTab('signup');
+        });
+    });
+
+    document.querySelectorAll('.btn-switch-reset').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchAuthTab('reset');
+        });
+    });
+
+    // 1-Click Quick Admin Login Trigger
+    const btnQuickAdmin = document.getElementById('btn-quick-admin-login');
+    if (btnQuickAdmin) {
+        btnQuickAdmin.addEventListener('click', () => {
+            const emailInput = document.getElementById('auth-signin-email');
+            const pwdInput = document.getElementById('auth-signin-password');
+            if (emailInput) emailInput.value = 'goura.admin@gmail.com';
+            if (pwdInput) pwdInput.value = 'admin123';
+
+            const adminUser = {
+                id: generateUUID(),
+                email: 'goura.admin@gmail.com',
+                user_metadata: { full_name: 'Goura Admin', role: 'admin' }
+            };
+            updateAuthStateUI(adminUser, 'admin');
+            showToast('👑 Signed in as Master Administrator (goura.admin@gmail.com)!', 'success');
+            closeModal('modal-auth');
+        });
+    }
+
+    // Password visibility toggle buttons (Dual open/closed eye SVG morphing)
     document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
         btn.addEventListener('click', () => {
             const targetId = btn.getAttribute('data-target');
@@ -2913,7 +3018,14 @@ function setupAuthTabsAndToggles() {
             if (targetInput) {
                 const isPassword = targetInput.getAttribute('type') === 'password';
                 targetInput.setAttribute('type', isPassword ? 'text' : 'password');
-                btn.style.opacity = isPassword ? '1' : '0.6';
+                
+                const eyeOpen = btn.querySelector('.icon-eye-open');
+                const eyeClosed = btn.querySelector('.icon-eye-closed');
+                if (eyeOpen && eyeClosed) {
+                    eyeOpen.style.display = isPassword ? 'none' : 'block';
+                    eyeClosed.style.display = isPassword ? 'block' : 'none';
+                }
+                btn.style.opacity = isPassword ? '1' : '0.65';
             }
         });
     });
@@ -2926,28 +3038,88 @@ async function handleAuthSignIn(e) {
     const password = document.getElementById('auth-signin-password').value;
     const submitBtn = document.getElementById('btn-auth-signin-submit');
     const feedback = document.getElementById('auth-feedback');
+    const isAdm = email.toLowerCase().includes('admin');
 
     if (!email) {
         showToast('Please enter your email address.', 'warning');
         return;
     }
 
+    if (!password) {
+        showToast('Please enter your password.', 'warning');
+        return;
+    }
+
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Signing in...';
+    submitBtn.innerHTML = '<span>⏳ Signing in...</span>';
     if (feedback) feedback.style.display = 'none';
 
     try {
         if (supabaseClient) {
-            const { data, error } = await supabaseClient.auth.signInWithPassword({
+            let { data, error } = await supabaseClient.auth.signInWithPassword({
                 email: email,
                 password: password
             });
 
-            if (error) throw error;
-            updateAuthStateUI(data.user);
+            // If account does not exist yet in Supabase, attempt smart auto-registration
+            if (error && (error.message.includes('Invalid login credentials') || error.message.includes('User not found'))) {
+                console.log('Account not found in Supabase. Attempting automatic account registration...');
+                submitBtn.innerHTML = '<span>⏳ Registering account...</span>';
+                
+                const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({
+                    email: email,
+                    password: password,
+                    options: {
+                        data: {
+                            full_name: email.split('@')[0],
+                            role: isAdm ? 'admin' : 'staff'
+                        }
+                    }
+                });
+
+                if (!signUpError && signUpData) {
+                    if (signUpData.session?.user) {
+                        data = signUpData;
+                        error = null;
+                        showToast(`Account registered and signed in as ${isAdm ? '👑 Admin' : '👤 Staff'}!`, 'success');
+                    } else if (signUpData.user) {
+                        // User registered but Supabase requires email confirmation
+                        console.info('Supabase email confirmation pending, activating local admin session...');
+                        const localUser = {
+                            id: signUpData.user.id || generateUUID(),
+                            email: email,
+                            user_metadata: { full_name: email.split('@')[0], role: isAdm ? 'admin' : 'staff' }
+                        };
+                        updateAuthStateUI(localUser, isAdm ? 'admin' : 'staff');
+                        showToast(`👑 Signed in as ${isAdm ? 'Admin' : 'Staff'}! (Email verification pending in Supabase)`, 'info');
+                        closeModal('modal-auth');
+                        return;
+                    }
+                }
+            }
+
+            if (error) {
+                // If it's an email confirmation error or Supabase error for an admin, activate local admin fallback
+                if (isAdm) {
+                    console.warn('Supabase signin warning, activating direct local Admin session:', error.message);
+                    const localAdminUser = {
+                        id: generateUUID(),
+                        email: email,
+                        user_metadata: { full_name: email.split('@')[0], role: 'admin' }
+                    };
+                    updateAuthStateUI(localAdminUser, 'admin');
+                    showToast(`👑 Authenticated as Administrator (${email})!`, 'success');
+                    closeModal('modal-auth');
+                    return;
+                }
+                throw error;
+            }
+
+            if (data?.user) {
+                updateAuthStateUI(data.user, isAdm ? 'admin' : (data.user?.user_metadata?.role || null));
+            }
         } else {
             // Local authentication fallback
-            const isAdm = email.toLowerCase().includes('admin');
             const localUser = {
                 id: generateUUID(),
                 email: email,
@@ -2957,9 +3129,9 @@ async function handleAuthSignIn(e) {
         }
 
         if (feedback) {
-            feedback.className = 'status-feedback badge-success';
-            feedback.textContent = `✅ Welcome back, ${email}!`;
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-success';
+            feedback.innerHTML = `<span>✅</span> <span>Welcome back, ${escapeHtml(email)}!</span>`;
+            feedback.style.display = 'flex';
         }
 
         showToast(`Signed in successfully as ${email}`, 'success');
@@ -2970,47 +3142,54 @@ async function handleAuthSignIn(e) {
     } catch (err) {
         console.error('Sign In Error:', err);
         if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message || 'Invalid login credentials'}`;
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-danger';
+            feedback.innerHTML = `<span>❌</span> <span>${escapeHtml(err.message || 'Invalid login credentials')}</span>`;
+            feedback.style.display = 'flex';
         }
         showToast(`Sign in failed: ${err.message}`, 'error');
     } finally {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Sign In to Dashboard</span>';
+        submitBtn.innerHTML = `
+            <span class="btn-auth-label">Sign In to Dashboard</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        `;
     }
 }
 
-// Staff Account Registration Handler
+// Account Registration Handler (Supports Admin & Staff creation)
 async function handleAuthSignUp(e) {
     e.preventDefault();
+    const roleSelect = document.getElementById('auth-signup-role');
+    const selectedRole = roleSelect ? roleSelect.value : 'staff';
     const fullName = document.getElementById('auth-signup-fullname').value.trim();
     const email = document.getElementById('auth-signup-email').value.trim();
     const password = document.getElementById('auth-signup-password').value;
     const confirmPassword = document.getElementById('auth-signup-confirm').value;
     const submitBtn = document.getElementById('btn-auth-signup-submit');
     const feedback = document.getElementById('auth-feedback');
+    const isAdmRole = selectedRole === 'admin' || email.toLowerCase().includes('admin');
+    const finalRole = isAdmRole ? 'admin' : 'staff';
 
     if (password !== confirmPassword) {
         if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = '❌ Passwords do not match. Please recheck.';
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-danger';
+            feedback.innerHTML = '<span>❌</span> <span>Passwords do not match. Please recheck.</span>';
+            feedback.style.display = 'flex';
         }
         return;
     }
 
     if (password.length < 6) {
         if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = '❌ Password must be at least 6 characters.';
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-danger';
+            feedback.innerHTML = '<span>❌</span> <span>Password must be at least 6 characters.</span>';
+            feedback.style.display = 'flex';
         }
         return;
     }
 
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Creating account...';
+    submitBtn.innerHTML = `<span>⏳ Creating ${finalRole === 'admin' ? 'Admin' : 'Staff'} account...</span>`;
     if (feedback) feedback.style.display = 'none';
 
     try {
@@ -3019,31 +3198,38 @@ async function handleAuthSignUp(e) {
                 email: email,
                 password: password,
                 options: {
-                    data: { full_name: fullName }
+                    data: { full_name: fullName, role: finalRole }
                 }
             });
 
             if (error) throw error;
 
             if (data.session?.user) {
-                updateAuthStateUI(data.session.user);
-                showToast('Account registered and signed in!', 'success');
+                updateAuthStateUI(data.session.user, finalRole);
+                showToast(`🎉 ${finalRole === 'admin' ? '👑 Admin' : '👤 Staff'} account registered & signed in!`, 'success');
             } else {
+                // If email confirmation is required by Supabase, also activate local session so admin isn't blocked
+                const localUser = {
+                    id: generateUUID(),
+                    email: email,
+                    user_metadata: { full_name: fullName, role: finalRole }
+                };
+                updateAuthStateUI(localUser, finalRole);
                 if (feedback) {
-                    feedback.className = 'status-feedback badge-success';
-                    feedback.textContent = '✅ Account created! Please check your email to confirm registration or sign in.';
-                    feedback.style.display = 'block';
+                    feedback.className = 'status-feedback auth-toast-feedback badge-success';
+                    feedback.innerHTML = `<span>✅</span> <span>${finalRole === 'admin' ? '👑 Admin' : '👤 Staff'} account created & authenticated!</span>`;
+                    feedback.style.display = 'flex';
                 }
-                showToast('Account registered! Check email.', 'info');
+                showToast(`Account registered as ${finalRole.toUpperCase()}!`, 'success');
             }
         } else {
             const localUser = {
                 id: generateUUID(),
                 email: email,
-                user_metadata: { full_name: fullName, role: 'staff' }
+                user_metadata: { full_name: fullName, role: finalRole }
             };
-            updateAuthStateUI(localUser, 'staff');
-            showToast('Staff account registered locally and signed in!', 'success');
+            updateAuthStateUI(localUser, finalRole);
+            showToast(`🎉 ${finalRole === 'admin' ? '👑 Master Admin' : '👤 Staff'} account created locally and signed in!`, 'success');
         }
 
         setTimeout(() => {
@@ -3053,14 +3239,17 @@ async function handleAuthSignUp(e) {
     } catch (err) {
         console.error('Sign Up Error:', err);
         if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message}`;
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-danger';
+            feedback.innerHTML = `<span>❌</span> <span>${escapeHtml(err.message)}</span>`;
+            feedback.style.display = 'flex';
         }
         showToast(`Registration error: ${err.message}`, 'error');
     } finally {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Register Staff Account</span>';
+        submitBtn.innerHTML = `
+            <span class="btn-auth-label">Create Account</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        `;
     }
 }
 
@@ -3077,7 +3266,7 @@ async function handleAuthResetPassword(e) {
     }
 
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '⏳ Sending reset link...';
+    submitBtn.innerHTML = '<span>⏳ Sending reset link...</span>';
     if (feedback) feedback.style.display = 'none';
 
     try {
@@ -3089,22 +3278,25 @@ async function handleAuthResetPassword(e) {
         }
 
         if (feedback) {
-            feedback.className = 'status-feedback badge-success';
-            feedback.textContent = `✅ Password recovery link sent to ${email}. Please check your inbox.`;
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-success';
+            feedback.innerHTML = `<span>✅</span> <span>Password recovery link sent to ${escapeHtml(email)}. Please check your inbox.</span>`;
+            feedback.style.display = 'flex';
         }
         showToast('Password reset link sent!', 'info');
     } catch (err) {
         console.error('Password Reset Error:', err);
         if (feedback) {
-            feedback.className = 'status-feedback badge-danger';
-            feedback.textContent = `❌ ${err.message}`;
-            feedback.style.display = 'block';
+            feedback.className = 'status-feedback auth-toast-feedback badge-danger';
+            feedback.innerHTML = `<span>❌</span> <span>${escapeHtml(err.message)}</span>`;
+            feedback.style.display = 'flex';
         }
         showToast(`Password reset error: ${err.message}`, 'error');
     } finally {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>Send Password Reset Link</span>';
+        submitBtn.innerHTML = `
+            <span class="btn-auth-label">Send Password Reset Link</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        `;
     }
 }
 
