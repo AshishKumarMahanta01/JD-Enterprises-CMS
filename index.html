@@ -408,14 +408,14 @@
                     </div>
                 </div>
 
-                <!-- Section 2: Primary Insurance Policy & Overall PUC with Uploads -->
+                <!-- Section 2: Primary Insurance Policy & General Expiry Details -->
                 <div class="form-section-title" style="margin-top: 1.5rem;">
                     <span class="step-num">2</span>
-                    <span>Primary Insurance Policy & General Documents</span>
+                    <span>Primary Insurance Policy & General Expiry Details</span>
                 </div>
 
                 <div class="doc-upload-grid">
-                    <!-- Insurance Details + Upload -->
+                    <!-- Insurance Details -->
                     <div class="doc-input-box">
                         <div class="form-grid grid-2">
                             <div class="form-group">
@@ -436,68 +436,25 @@
                                 <option value="not_done">❌ Not Done</option>
                             </select>
                         </div>
-
-                        <div class="form-group" style="margin-top: 0.5rem;">
-                            <label>Upload Policy Document (PDF / Image)</label>
-                            <input type="hidden" id="input-existing-insurance-url">
-                            <div class="doc-dropzone" id="insurance-dropzone">
-                                <input type="file" id="input-insurance-file" accept="image/*,application/pdf" style="display:none;">
-                                <div class="dropzone-empty" id="insurance-dropzone-empty">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                                    <span>Upload Policy Document</span>
-                                </div>
-                                <div class="dropzone-preview" id="insurance-dropzone-preview" style="display:none;">
-                                    <img src="" id="insurance-thumb-img" class="doc-thumb-preview" alt="Insurance Thumbnail" style="display:none;">
-                                    <div class="doc-info-text">
-                                        <span class="doc-filename" id="insurance-filename"></span>
-                                        <span class="doc-filesize" id="insurance-filesize"></span>
-                                    </div>
-                                    <div class="doc-action-btns">
-                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-insurance" title="Preview / Download Document">👁️</button>
-                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-insurance" title="Remove Document">&times;</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
 
-                    <!-- General PUC Details + Upload -->
+                    <!-- General PUC Details -->
                     <div class="doc-input-box">
                         <div class="form-group">
                             <label for="input-customer-puc-date">General PUC Expiry Date</label>
                             <input type="date" id="input-customer-puc-date">
                         </div>
-
-                        <div class="form-group" style="margin-top: 0.5rem;">
-                            <label>Upload General PUC Certificate (PDF / Image)</label>
-                            <input type="hidden" id="input-existing-puc-url">
-                            <div class="doc-dropzone" id="puc-dropzone">
-                                <input type="file" id="input-puc-file" accept="image/*,application/pdf" style="display:none;">
-                                <div class="dropzone-empty" id="puc-dropzone-empty">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                                    <span>Upload PUC Certificate</span>
-                                </div>
-                                <div class="dropzone-preview" id="puc-dropzone-preview" style="display:none;">
-                                    <img src="" id="puc-thumb-img" class="doc-thumb-preview" alt="PUC Thumbnail" style="display:none;">
-                                    <div class="doc-info-text">
-                                        <span class="doc-filename" id="puc-filename"></span>
-                                        <span class="doc-filesize" id="puc-filesize"></span>
-                                    </div>
-                                    <div class="doc-action-btns">
-                                        <button type="button" class="btn-sm btn-icon" id="btn-preview-puc" title="Preview / Download Document">👁️</button>
-                                        <button type="button" class="btn-sm btn-icon btn-danger-icon" id="btn-clear-puc" title="Remove Document">&times;</button>
-                                    </div>
-                                </div>
-                            </div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top: 0.5rem; line-height: 1.4;">
+                            Track overall customer PUC expiry date alongside individual vehicle PUC expirations.
                         </div>
                     </div>
                 </div>
 
-                <!-- Section 3: Dynamic Multi-Vehicle Fleet with Individual Insurance & PUC -->
+                <!-- Section 3: Dynamic Multi-Vehicle Fleet with Dynamic RC Uploads -->
                 <div class="form-section-title flex-between" style="margin-top: 1.5rem;">
                     <div class="flex-align-center">
                         <span class="step-num">3</span>
-                        <span>Vehicle Fleet & Dynamic RC / Insurance / PUC Uploads</span>
+                        <span>Vehicle Fleet & Dynamic RC Document Uploads</span>
                     </div>
 
                     <!-- Vehicle Count Stepper Controls (+ / -) -->
@@ -571,7 +528,6 @@
                 <div class="auth-tabs" role="tablist">
                     <button type="button" id="tab-auth-signin" class="auth-tab-btn active" role="tab" aria-selected="true">Sign In</button>
                     <button type="button" id="tab-auth-signup" class="auth-tab-btn" role="tab" aria-selected="false">Create Account</button>
-                    <button type="button" id="tab-auth-quick" class="auth-tab-btn" role="tab" aria-selected="false">⚡ Quick Login</button>
                     <button type="button" id="tab-auth-reset" class="auth-tab-btn" role="tab" aria-selected="false">Forgot Password</button>
                 </div>
 
@@ -628,24 +584,7 @@
                     </button>
                 </form>
 
-                <!-- 3. QUICK 1-CLICK LOGIN FORM -->
-                <div id="form-auth-quick" style="display: none;">
-                    <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                        Instant 1-Click Access for staff operators and system administrators:
-                    </p>
-                    <div class="quick-login-grid">
-                        <button type="button" id="btn-quick-admin" class="btn-quick-login">
-                            <span class="btn-quick-login-title">👑 Admin Login</span>
-                            <span class="btn-quick-login-desc">Full access: Add, edit, delete & backup</span>
-                        </button>
-                        <button type="button" id="btn-quick-staff" class="btn-quick-login">
-                            <span class="btn-quick-login-title">👤 Staff Login</span>
-                            <span class="btn-quick-login-desc">Entry & modify: Add, edit & upload RC</span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 4. FORGOT PASSWORD / RECOVERY FORM -->
+                <!-- 3. FORGOT PASSWORD / RECOVERY FORM -->
                 <form id="form-auth-reset" style="display: none;">
                     <div class="form-group">
                         <label for="auth-reset-email">Your Registered Email</label>
@@ -801,6 +740,9 @@
     <!-- ===================================================== -->
     <!-- SUPABASE SETTINGS MODAL -->
     <!-- ===================================================== -->
+    <!-- ===================================================== -->
+    <!-- SUPABASE SETTINGS MODAL -->
+    <!-- ===================================================== -->
     <div id="modal-supabase-settings" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="supabase-title">
         <div class="modal-card modal-sm">
             <div class="modal-header">
@@ -814,7 +756,17 @@
             <div class="supabase-config-body">
                 <div class="info-alert">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                    <span>Execute <code>schema.sql</code> in your Supabase SQL Editor, then paste your credentials below:</span>
+                    <div>
+                        <span>Paste credentials below. To update or fix table columns in Supabase:</span>
+                        <div style="display:flex; gap:0.4rem; margin-top:0.4rem; flex-wrap:wrap;">
+                            <button type="button" id="btn-copy-migration-sql" class="btn btn-secondary btn-xs" style="padding:0.25rem 0.5rem; font-size:0.75rem;">
+                                📋 Copy SQL Migration
+                            </button>
+                            <button type="button" id="btn-copy-full-sql" class="btn btn-secondary btn-xs" style="padding:0.25rem 0.5rem; font-size:0.75rem;">
+                                📋 Copy schema.sql
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group" style="margin-top: 1rem;">

@@ -1738,63 +1738,7 @@ input:focus {
   box-shadow: var(--shadow-sm);
 }
 
-.quick-login-box {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  margin-top: 1rem;
-}
 
-.quick-login-title {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 0.65rem;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.quick-login-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.65rem;
-}
-
-.btn-quick-login {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 0.65rem 0.85rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  text-align: left;
-}
-
-.btn-quick-login:hover {
-  border-color: var(--primary);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-  background: var(--primary-subtle);
-}
-
-.btn-quick-login-title {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.btn-quick-login-desc {
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-  margin-top: 0.15rem;
-}
 
 .role-badge-guest {
   background: rgba(245, 158, 11, 0.15);

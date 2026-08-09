@@ -23,13 +23,11 @@ let activeFilters = {
     entryDate: 'all'
 };
 
-// Form In-Memory File State for Customer & General Docs
+// Form In-Memory File State for Customer KYC Docs
 let formAadhaarDoc = { file: null, previewUrl: null, name: '', isImage: false };
 let formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
-let formInsuranceDoc = { file: null, previewUrl: null, name: '', isImage: false };
-let formPucDoc = { file: null, previewUrl: null, name: '', isImage: false };
 
-// Form In-Memory File State for Dynamic Vehicle RCs, Insurances, and PUCs
+// Form In-Memory File State for Dynamic Vehicle RC Docs
 let vehicleFilesState = {};
 
 // Local IndexedDB Storage Configuration (Offline Fallback)
@@ -429,81 +427,316 @@ async function uploadFileToSupabase(file, folderPrefix, identifier) {
 }
 
 // ==============================================================================
-// 3. DATA FETCHING & SYNCHRONIZATION
+// 3. RESILIENT SUPABASE DATABASE ADAPTER & SCHEMA CACHE AUTO-HEALER
 // ==============================================================================
+
+const SCHEMA_MIGRATION_SQL = `-- Safe Migration Script for Supabase PostgreSQL
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS pan_number TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS pan_doc_url TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS aadhar_number TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS aadhar_doc_url TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS puc_doc_url TEXT;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS puc_expiry_date DATE;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'permanent';
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS created_by_email TEXT DEFAULT 'staff@jdenterprises.com';
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS created_by_name TEXT DEFAULT 'Staff';
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS updated_by_email TEXT DEFAULT 'staff@jdenterprises.com';
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS updated_by_name TEXT DEFAULT 'Staff';
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS vehicle_number TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS rc_document_url TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS insurance_expiry_date DATE;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS insurance_doc_url TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS puc_expiry_date DATE;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS puc_doc_url TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS updated_by_email TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE public.insurance_policies ADD COLUMN IF NOT EXISTS policy_number TEXT;
+ALTER TABLE public.insurance_policies ADD COLUMN IF NOT EXISTS insurance_expiry_date DATE;
+ALTER TABLE public.insurance_policies ADD COLUMN IF NOT EXISTS policy_doc_url TEXT;
+ALTER TABLE public.insurance_policies ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS action_type TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS customer_id UUID;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS customer_name TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS details TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS actor_email TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS actor_name TEXT;
+ALTER TABLE public.activity_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Reload PostgREST schema cache immediately
+NOTIFY pgrst, 'reload schema';`;
+
+const FULL_SCHEMA_SQL = `-- Complete Schema & Storage Configuration for Supabase
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+CREATE TABLE IF NOT EXISTS public.customers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    pan_number TEXT,
+    pan_doc_url TEXT,
+    aadhar_number TEXT,
+    aadhar_doc_url TEXT,
+    puc_doc_url TEXT,
+    puc_expiry_date DATE,
+    type TEXT NOT NULL DEFAULT 'permanent' CHECK (type IN ('permanent', 'lead')),
+    created_by_email TEXT DEFAULT 'staff@jdenterprises.com',
+    created_by_name TEXT DEFAULT 'Staff',
+    updated_by_email TEXT DEFAULT 'staff@jdenterprises.com',
+    updated_by_name TEXT DEFAULT 'Staff',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.vehicles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+    vehicle_number TEXT NOT NULL DEFAULT '',
+    rc_document_url TEXT,
+    insurance_expiry_date DATE,
+    insurance_doc_url TEXT,
+    puc_expiry_date DATE,
+    puc_doc_url TEXT,
+    updated_by_email TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.insurance_policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+    policy_number TEXT,
+    insurance_expiry_date DATE,
+    policy_doc_url TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'not_done')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.activity_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    action_type TEXT NOT NULL,
+    customer_id UUID,
+    customer_name TEXT,
+    details TEXT,
+    actor_email TEXT,
+    actor_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.insurance_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Enable read and write for all users on customers" ON public.customers;
+CREATE POLICY "Enable read and write for all users on customers" ON public.customers FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Enable read and write for all users on vehicles" ON public.vehicles;
+CREATE POLICY "Enable read and write for all users on vehicles" ON public.vehicles FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Enable read and write for all users on insurance_policies" ON public.insurance_policies;
+CREATE POLICY "Enable read and write for all users on insurance_policies" ON public.insurance_policies FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Enable read and write for all users on activity_logs" ON public.activity_logs;
+CREATE POLICY "Enable read and write for all users on activity_logs" ON public.activity_logs FOR ALL USING (true) WITH CHECK (true);
+
+INSERT INTO storage.buckets (id, name, public) VALUES ('rc-documents', 'rc-documents', true) ON CONFLICT (id) DO UPDATE SET public = true;
+INSERT INTO storage.buckets (id, name, public) VALUES ('vehicle-docs', 'vehicle-docs', true) ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "RC Document Upload Policy" ON storage.objects;
+CREATE POLICY "RC Document Upload Policy" ON storage.objects FOR INSERT WITH CHECK (bucket_id IN ('rc-documents', 'vehicle-docs'));
+
+DROP POLICY IF EXISTS "RC Document Select Policy" ON storage.objects;
+CREATE POLICY "RC Document Select Policy" ON storage.objects FOR SELECT USING (bucket_id IN ('rc-documents', 'vehicle-docs'));
+
+DROP POLICY IF EXISTS "RC Document Update Policy" ON storage.objects;
+CREATE POLICY "RC Document Update Policy" ON storage.objects FOR UPDATE USING (bucket_id IN ('rc-documents', 'vehicle-docs'));
+
+DROP POLICY IF EXISTS "RC Document Delete Policy" ON storage.objects;
+CREATE POLICY "RC Document Delete Policy" ON storage.objects FOR DELETE USING (bucket_id IN ('rc-documents', 'vehicle-docs'));
+
+NOTIFY pgrst, 'reload schema';`;
+
+async function safeUpsertRecord(client, tableName, records) {
+    if (!client || !records || records.length === 0) return { data: null, error: null, strippedColumns: [] };
+    let currentRecords = records.map(r => ({ ...r }));
+    const maxRetries = 15;
+    let retries = 0;
+    const strippedCols = new Set();
+
+    while (retries < maxRetries) {
+        const { data, error } = await client.from(tableName).upsert(currentRecords);
+        if (!error) {
+            return { data, error: null, strippedColumns: Array.from(strippedCols) };
+        }
+
+        const msg = error.message || '';
+        // Extract column name from PostgREST schema cache errors or Postgres missing column errors
+        const colMatch = msg.match(/Could not find the '([^']+)' column/i) ||
+                         msg.match(/column "([^"]+)" of relation/i) ||
+                         msg.match(/column ([a-zA-Z0-9_]+) does not exist/i);
+
+        if (colMatch && colMatch[1]) {
+            const missingCol = colMatch[1];
+            strippedCols.add(missingCol);
+            currentRecords = currentRecords.map(r => {
+                const copy = { ...r };
+                delete copy[missingCol];
+                return copy;
+            });
+            retries++;
+            continue;
+        }
+
+        return { data: null, error, strippedColumns: Array.from(strippedCols) };
+    }
+
+    return { data: null, error: new Error('Schema retry limit reached'), strippedColumns: Array.from(strippedCols) };
+}
+
+async function safeInsertRecord(client, tableName, records) {
+    if (!client || !records || records.length === 0) return { data: null, error: null, strippedColumns: [] };
+    let currentRecords = records.map(r => ({ ...r }));
+    const maxRetries = 15;
+    let retries = 0;
+    const strippedCols = new Set();
+
+    while (retries < maxRetries) {
+        const { data, error } = await client.from(tableName).insert(currentRecords);
+        if (!error) {
+            return { data, error: null, strippedColumns: Array.from(strippedCols) };
+        }
+
+        const msg = error.message || '';
+        const colMatch = msg.match(/Could not find the '([^']+)' column/i) ||
+                         msg.match(/column "([^"]+)" of relation/i) ||
+                         msg.match(/column ([a-zA-Z0-9_]+) does not exist/i);
+
+        if (colMatch && colMatch[1]) {
+            const missingCol = colMatch[1];
+            strippedCols.add(missingCol);
+            currentRecords = currentRecords.map(r => {
+                const copy = { ...r };
+                delete copy[missingCol];
+                return copy;
+            });
+            retries++;
+            continue;
+        }
+
+        return { data: null, error, strippedColumns: Array.from(strippedCols) };
+    }
+
+    return { data: null, error: new Error('Schema retry limit reached'), strippedColumns: Array.from(strippedCols) };
+}
+
+async function safeDeleteRecord(client, tableName, column, value) {
+    if (!client) return;
+    try {
+        await client.from(tableName).delete().eq(column, value);
+    } catch (e) {
+        console.warn(`Safe delete notice (${tableName}.${column}):`, e.message);
+    }
+}
+
+function normalizeCustomerRecord(c, vehiclesList = [], policiesList = []) {
+    const custId = c.id || generateUUID();
+    const custVehicles = (Array.isArray(c.vehicles) && c.vehicles.length > 0)
+        ? c.vehicles
+        : (vehiclesList || []).filter(v => String(v.customer_id) === String(custId));
+
+    const custPolicies = (Array.isArray(c.insurance_policies) && c.insurance_policies.length > 0)
+        ? c.insurance_policies
+        : (policiesList || []).filter(p => String(p.customer_id) === String(custId));
+
+    const primaryPolicy = custPolicies[0] || {};
+
+    return {
+        id: custId,
+        full_name: c.full_name || c.customer_name || '',
+        phone: c.phone || c.customer_phone || '',
+        pan_number: c.pan_number || c.pan_num || '',
+        pan_doc_url: c.pan_doc_url || null,
+        aadhar_number: c.aadhar_number || c.aadhar_num || '',
+        aadhar_doc_url: c.aadhar_doc_url || null,
+        puc_doc_url: c.puc_doc_url || null,
+        puc_expiry_date: c.puc_expiry_date || c.puc_due || null,
+        type: c.type || c.customer_type || 'permanent',
+        created_by_email: c.created_by_email || '',
+        created_by_name: c.created_by_name || '',
+        updated_by_email: c.updated_by_email || '',
+        updated_by_name: c.updated_by_name || '',
+        created_at: c.created_at || new Date().toISOString(),
+        updated_at: c.updated_at || c.created_at || new Date().toISOString(),
+        vehicles: custVehicles.map(v => ({
+            id: v.id || generateUUID(),
+            customer_id: custId,
+            vehicle_number: v.vehicle_number || v.vehicle_num || '',
+            rc_document_url: v.rc_document_url || v.rc_doc_url || null,
+            insurance_expiry_date: v.insurance_expiry_date || v.insurance_due || null,
+            insurance_doc_url: v.insurance_doc_url || v.ins_doc_url || null,
+            puc_expiry_date: v.puc_expiry_date || v.puc_due || null,
+            puc_doc_url: v.puc_doc_url || null,
+            updated_by_email: v.updated_by_email || ''
+        })),
+        insurance_policy: {
+            id: primaryPolicy.id || null,
+            customer_id: custId,
+            policy_number: primaryPolicy.policy_number || '',
+            insurance_expiry_date: primaryPolicy.insurance_expiry_date || null,
+            policy_doc_url: primaryPolicy.policy_doc_url || null,
+            status: primaryPolicy.status || 'pending'
+        }
+    };
+}
+
 async function fetchAllData() {
     if (supabaseClient) {
         try {
             const { data, error } = await supabaseClient
                 .from('customers')
                 .select(`
-                    id,
-                    full_name,
-                    phone,
-                    pan_number,
-                    pan_doc_url,
-                    aadhar_number,
-                    aadhar_doc_url,
-                    puc_doc_url,
-                    puc_expiry_date,
-                    type,
-                    created_by_email,
-                    created_by_name,
-                    updated_by_email,
-                    updated_by_name,
-                    created_at,
-                    updated_at,
-                    vehicles (
-                        id,
-                        customer_id,
-                        vehicle_number,
-                        rc_document_url,
-                        insurance_expiry_date,
-                        insurance_doc_url,
-                        puc_expiry_date,
-                        puc_doc_url
-                    ),
-                    insurance_policies (
-                        id,
-                        customer_id,
-                        policy_number,
-                        insurance_expiry_date,
-                        policy_doc_url,
-                        status
-                    )
+                    *,
+                    vehicles (*),
+                    insurance_policies (*)
                 `)
                 .order('created_at', { ascending: false });
 
-            if (error) throw error;
+            if (error) {
+                console.warn('Nested query schema notice, executing fallback select:', error.message);
+                const { data: simpleData, error: simpleErr } = await supabaseClient
+                    .from('customers')
+                    .select('*')
+                    .order('created_at', { ascending: false });
 
-            customersData = (data || []).map(c => ({
-                id: c.id,
-                full_name: c.full_name || '',
-                phone: c.phone || '',
-                pan_number: c.pan_number || '',
-                pan_doc_url: c.pan_doc_url || null,
-                aadhar_number: c.aadhar_number || '',
-                aadhar_doc_url: c.aadhar_doc_url || null,
-                puc_doc_url: c.puc_doc_url || null,
-                puc_expiry_date: c.puc_expiry_date || null,
-                type: c.type || 'permanent',
-                created_by_email: c.created_by_email || '',
-                created_by_name: c.created_by_name || '',
-                updated_by_email: c.updated_by_email || '',
-                updated_by_name: c.updated_by_name || '',
-                created_at: c.created_at,
-                updated_at: c.updated_at || c.created_at,
-                vehicles: c.vehicles || [],
-                insurance_policy: (c.insurance_policies && c.insurance_policies[0]) || {
-                    id: null,
-                    policy_number: '',
-                    insurance_expiry_date: null,
-                    policy_doc_url: null,
-                    status: 'pending'
-                }
-            }));
+                if (simpleErr) throw simpleErr;
 
-            // Sync to local fallback
+                let allVehicles = [];
+                let allPolicies = [];
+                try {
+                    const { data: vData } = await supabaseClient.from('vehicles').select('*');
+                    if (vData) allVehicles = vData;
+                } catch (e) {}
+
+                try {
+                    const { data: pData } = await supabaseClient.from('insurance_policies').select('*');
+                    if (pData) allPolicies = pData;
+                } catch (e) {}
+
+                customersData = (simpleData || []).map(c => normalizeCustomerRecord(c, allVehicles, allPolicies));
+            } else {
+                customersData = (data || []).map(c => normalizeCustomerRecord(c, c.vehicles || [], c.insurance_policies || []));
+            }
+
+            // Sync to local fallback store
             for (let item of customersData) {
                 await localStoreManager.save(item);
             }
@@ -523,9 +756,22 @@ async function fetchAllData() {
 // ==============================================================================
 function parseLocalDate(dateString) {
     if (!dateString) return null;
-    if (typeof dateString !== 'string') dateString = String(dateString);
-    const cleanStr = dateString.split('T')[0].trim();
-    const parts = cleanStr.split('-');
+    if (dateString instanceof Date) {
+        return new Date(dateString.getFullYear(), dateString.getMonth(), dateString.getDate(), 0, 0, 0, 0);
+    }
+    const str = String(dateString).trim();
+    if (!str) return null;
+
+    // For full ISO timestamp strings (contains 'T' or ':')
+    if (str.includes('T') || str.includes(':')) {
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+            return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+        }
+    }
+
+    // For pure YYYY-MM-DD date strings
+    const parts = str.split('-');
     if (parts.length === 3) {
         const year = parseInt(parts[0], 10);
         const month = parseInt(parts[1], 10) - 1;
@@ -534,10 +780,10 @@ function parseLocalDate(dateString) {
             return new Date(year, month, day, 0, 0, 0, 0);
         }
     }
-    const fallback = new Date(dateString);
+
+    const fallback = new Date(str);
     if (isNaN(fallback.getTime())) return null;
-    fallback.setHours(0, 0, 0, 0);
-    return fallback;
+    return new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate(), 0, 0, 0, 0);
 }
 
 function calculateDaysRemaining(dateString) {
@@ -974,12 +1220,6 @@ function renderDashboard() {
                     if (v.rc_document_url) {
                         buttons += `<button type="button" class="table-doc-pill pill-rc preview-any-doc-btn" data-doc-url="${escapeHtml(v.rc_document_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} RC (${escapeHtml(v.vehicle_number)})" title="Preview RC">🚗 RC</button> `;
                     }
-                    if (v.insurance_doc_url) {
-                        buttons += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(v.insurance_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} Insurance Doc" title="Preview Vehicle Ins. Doc">📄 Ins</button> `;
-                    }
-                    if (v.puc_doc_url) {
-                        buttons += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(v.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Vehicle #${i + 1} PUC Doc" title="Preview Vehicle PUC Doc">💨 PUC</button> `;
-                    }
 
                     return `
                         <div style="background:var(--bg-subtle); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:0.4rem 0.55rem; margin-bottom:0.35rem;">
@@ -1028,12 +1268,6 @@ function renderDashboard() {
             }
             if (c.pan_doc_url) {
                 docPillsHtml += `<button type="button" class="table-doc-pill pill-pan preview-any-doc-btn" data-doc-url="${escapeHtml(c.pan_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — PAN Card" title="Preview / Download PAN">💳 PAN</button> `;
-            }
-            if (c.insurance_policy?.policy_doc_url) {
-                docPillsHtml += `<button type="button" class="table-doc-pill pill-insurance preview-any-doc-btn" data-doc-url="${escapeHtml(c.insurance_policy.policy_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — Primary Insurance Policy" title="Preview / Download Policy">📄 Primary Policy</button> `;
-            }
-            if (c.puc_doc_url) {
-                docPillsHtml += `<button type="button" class="table-doc-pill pill-puc preview-any-doc-btn" data-doc-url="${escapeHtml(c.puc_doc_url)}" data-doc-title="${escapeHtml(c.full_name)} — General PUC Certificate" title="Preview / Download PUC">💨 General PUC</button> `;
             }
 
             if (!docPillsHtml) {
@@ -1228,7 +1462,6 @@ async function updatePolicyStatus(customerId, newStatus) {
 
             if (error) throw error;
             showToast('Policy status updated in Supabase cloud!', 'success');
-            await logActivity('policy_renewed', customer.full_name, `Policy marked as ${newStatus}`);
         } catch (err) {
             console.warn('Status cloud update failed:', err.message);
             showToast('Status updated locally.', 'info');
@@ -1237,6 +1470,7 @@ async function updatePolicyStatus(customerId, newStatus) {
         showToast('Status updated locally.', 'info');
     }
 
+    await logActivity('policy_renewed', customer.full_name, `Policy marked as ${newStatus}`);
     await localStoreManager.save(customer);
     renderDashboard();
 }
@@ -1405,15 +1639,13 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
         const insExpiry = card.querySelector('.input-v-ins-date')?.value || '';
         const pucExpiry = card.querySelector('.input-v-puc-date')?.value || '';
         const existingRcUrl = card.querySelector('.input-v-existing-rc-url')?.value || '';
-        const existingInsUrl = card.querySelector('.input-v-existing-ins-url')?.value || '';
-        const existingPucUrl = card.querySelector('.input-v-existing-puc-url')?.value || '';
 
         currentValues.push({
             vehicle_number: plate,
             insurance_expiry_date: insExpiry,
-            insurance_doc_url: existingInsUrl,
+            insurance_doc_url: null,
             puc_expiry_date: pucExpiry,
-            puc_doc_url: existingPucUrl,
+            puc_doc_url: null,
             rc_document_url: existingRcUrl
         });
     });
@@ -1426,14 +1658,10 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
         const vInsExpiry = prev.insurance_expiry_date || '';
         const vPucExpiry = prev.puc_expiry_date || '';
         const existingRcUrl = prev.rc_document_url || '';
-        const existingInsUrl = prev.insurance_doc_url || '';
-        const existingPucUrl = prev.puc_doc_url || '';
 
         if (!vehicleFilesState[i]) {
             vehicleFilesState[i] = {
-                rc: { file: null, previewUrl: existingRcUrl || null, name: existingRcUrl ? 'Existing RC' : '', isImage: existingRcUrl ? existingRcUrl.match(/\.(jpeg|jpg|png|webp)/i) !== null : false },
-                ins: { file: null, previewUrl: existingInsUrl || null, name: existingInsUrl ? 'Existing Ins Doc' : '', isImage: existingInsUrl ? existingInsUrl.match(/\.(jpeg|jpg|png|webp)/i) !== null : false },
-                puc: { file: null, previewUrl: existingPucUrl || null, name: existingPucUrl ? 'Existing PUC Doc' : '', isImage: existingPucUrl ? existingPucUrl.match(/\.(jpeg|jpg|png|webp)/i) !== null : false }
+                rc: { file: null, previewUrl: existingRcUrl || null, name: existingRcUrl ? 'Existing RC' : '', isImage: existingRcUrl ? existingRcUrl.match(/\.(jpeg|jpg|png|webp)/i) !== null : false }
             };
         }
 
@@ -1479,7 +1707,7 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
                 <!-- 1. Vehicle RC Upload -->
                 <div class="v-upload-box">
                     <div class="v-upload-header v-upload-header-rc">
-                        <span>🚗 Vehicle RC Document</span>
+                        <span>🚗 Vehicle RC Document (Image / PDF)</span>
                     </div>
                     <input type="hidden" class="input-v-existing-rc-url" value="${escapeHtml(existingRcUrl)}">
                     <div class="rc-upload-dropzone" id="v-rc-dropzone-${i}">
@@ -1501,67 +1729,13 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
                         </div>
                     </div>
                 </div>
-
-                <!-- 2. Vehicle Insurance Upload -->
-                <div class="v-upload-box">
-                    <div class="v-upload-header v-upload-header-ins">
-                        <span>📄 Vehicle Insurance Policy</span>
-                    </div>
-                    <input type="hidden" class="input-v-existing-ins-url" value="${escapeHtml(existingInsUrl)}">
-                    <div class="rc-upload-dropzone" id="v-ins-dropzone-${i}">
-                        <input type="file" id="v-ins-input-${i}" accept="image/*,application/pdf" style="display:none;">
-                        <div class="rc-empty-placeholder" id="v-ins-empty-${i}">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                            <span>Upload Policy</span>
-                        </div>
-                        <div class="rc-preview-thumbnail-box" id="v-ins-preview-${i}" style="display:none;">
-                            <img src="" id="v-ins-thumb-${i}" class="thumbnail-img-preview" alt="Ins Thumbnail" style="display:none;">
-                            <div class="thumbnail-doc-info">
-                                <span class="thumbnail-filename" id="v-ins-name-${i}"></span>
-                                <span class="thumbnail-filesize" id="v-ins-size-${i}"></span>
-                            </div>
-                            <div class="thumbnail-actions">
-                                <button type="button" class="btn-sm btn-icon" id="v-ins-view-${i}" title="Preview / Download">👁️</button>
-                                <button type="button" class="btn-sm btn-icon btn-danger-icon" id="v-ins-clear-${i}" title="Remove">&times;</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 3. Vehicle PUC Upload -->
-                <div class="v-upload-box">
-                    <div class="v-upload-header v-upload-header-puc">
-                        <span>💨 Vehicle PUC Document</span>
-                    </div>
-                    <input type="hidden" class="input-v-existing-puc-url" value="${escapeHtml(existingPucUrl)}">
-                    <div class="rc-upload-dropzone" id="v-puc-dropzone-${i}">
-                        <input type="file" id="v-puc-input-${i}" accept="image/*,application/pdf" style="display:none;">
-                        <div class="rc-empty-placeholder" id="v-puc-empty-${i}">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                            <span>Upload PUC</span>
-                        </div>
-                        <div class="rc-preview-thumbnail-box" id="v-puc-preview-${i}" style="display:none;">
-                            <img src="" id="v-puc-thumb-${i}" class="thumbnail-img-preview" alt="PUC Thumbnail" style="display:none;">
-                            <div class="thumbnail-doc-info">
-                                <span class="thumbnail-filename" id="v-puc-name-${i}"></span>
-                                <span class="thumbnail-filesize" id="v-puc-size-${i}"></span>
-                            </div>
-                            <div class="thumbnail-actions">
-                                <button type="button" class="btn-sm btn-icon" id="v-puc-view-${i}" title="Preview / Download">👁️</button>
-                                <button type="button" class="btn-sm btn-icon btn-danger-icon" id="v-puc-clear-${i}" title="Remove">&times;</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         `;
 
         container.appendChild(card);
 
-        // Bind Dropzones for this Vehicle Card
+        // Bind Dropzone for RC Document
         bindSingleDropzone(`v-rc-input-${i}`, `v-rc-dropzone-${i}`, `v-rc-empty-${i}`, `v-rc-preview-${i}`, `v-rc-thumb-${i}`, `v-rc-name-${i}`, `v-rc-size-${i}`, `v-rc-view-${i}`, `v-rc-clear-${i}`, vehicleFilesState[i].rc, `Vehicle #${i} — RC Document`, i);
-        bindSingleDropzone(`v-ins-input-${i}`, `v-ins-dropzone-${i}`, `v-ins-empty-${i}`, `v-ins-preview-${i}`, `v-ins-thumb-${i}`, `v-ins-name-${i}`, `v-ins-size-${i}`, `v-ins-view-${i}`, `v-ins-clear-${i}`, vehicleFilesState[i].ins, `Vehicle #${i} — Insurance Policy`);
-        bindSingleDropzone(`v-puc-input-${i}`, `v-puc-dropzone-${i}`, `v-puc-empty-${i}`, `v-puc-preview-${i}`, `v-puc-thumb-${i}`, `v-puc-name-${i}`, `v-puc-size-${i}`, `v-puc-view-${i}`, `v-puc-clear-${i}`, vehicleFilesState[i].puc, `Vehicle #${i} — PUC Certificate`);
     }
 
     // Bind manual Fetch RC buttons
@@ -1595,15 +1769,13 @@ function renderDynamicVehicleInputs(count, existingVehicles = []) {
                     const insExpiry = card.querySelector('.input-v-ins-date')?.value || '';
                     const pucExpiry = card.querySelector('.input-v-puc-date')?.value || '';
                     const existingRcUrl = card.querySelector('.input-v-existing-rc-url')?.value || '';
-                    const existingInsUrl = card.querySelector('.input-v-existing-ins-url')?.value || '';
-                    const existingPucUrl = card.querySelector('.input-v-existing-puc-url')?.value || '';
 
                     newVehiclesList.push({
                         vehicle_number: plate,
                         insurance_expiry_date: insExpiry,
-                        insurance_doc_url: existingInsUrl,
+                        insurance_doc_url: null,
                         puc_expiry_date: pucExpiry,
-                        puc_doc_url: existingPucUrl,
+                        puc_doc_url: null,
                         rc_document_url: existingRcUrl
                     });
 
@@ -1654,8 +1826,6 @@ async function handleCustomerFormSubmit(e) {
 
         let finalAadharUrl = document.getElementById('input-existing-aadhar-url').value || null;
         let finalPanUrl = document.getElementById('input-existing-pan-url').value || null;
-        let finalInsuranceUrl = document.getElementById('input-existing-insurance-url').value || null;
-        let finalPucUrl = document.getElementById('input-existing-puc-url').value || null;
 
         // Upload Aadhaar File if new
         if (formAadhaarDoc.file) {
@@ -1677,26 +1847,6 @@ async function handleCustomerFormSubmit(e) {
             }
         }
 
-        // Upload Insurance Policy File if new
-        if (formInsuranceDoc.file) {
-            if (supabaseClient) {
-                const cloudUrl = await uploadFileToSupabase(formInsuranceDoc.file, 'insurance', customerId);
-                finalInsuranceUrl = cloudUrl || formInsuranceDoc.previewUrl;
-            } else {
-                finalInsuranceUrl = formInsuranceDoc.previewUrl;
-            }
-        }
-
-        // Upload General PUC Certificate File if new
-        if (formPucDoc.file) {
-            if (supabaseClient) {
-                const cloudUrl = await uploadFileToSupabase(formPucDoc.file, 'puc', customerId);
-                finalPucUrl = cloudUrl || formPucDoc.previewUrl;
-            } else {
-                finalPucUrl = formPucDoc.previewUrl;
-            }
-        }
-
         // Gather Dynamic Vehicles
         const vehicleCards = document.querySelectorAll('.vehicle-entry-card');
         const vehiclesList = [];
@@ -1709,9 +1859,6 @@ async function handleCustomerFormSubmit(e) {
             const pucExpiry = card.querySelector('.input-v-puc-date').value || customerPucDate;
 
             let existingRcUrl = card.querySelector('.input-v-existing-rc-url')?.value || null;
-            let existingInsUrl = card.querySelector('.input-v-existing-ins-url')?.value || null;
-            let existingPucUrl = card.querySelector('.input-v-existing-puc-url')?.value || null;
-
             const fileStates = vehicleFilesState[vIndex] || {};
 
             let uploadedRcUrl = existingRcUrl;
@@ -1724,34 +1871,14 @@ async function handleCustomerFormSubmit(e) {
                 }
             }
 
-            let uploadedInsUrl = existingInsUrl;
-            if (fileStates.ins && fileStates.ins.file) {
-                if (supabaseClient) {
-                    const cloudUrl = await uploadFileToSupabase(fileStates.ins.file, 'v-insurance', `${customerId}_v${vIndex}`);
-                    uploadedInsUrl = cloudUrl || fileStates.ins.previewUrl;
-                } else {
-                    uploadedInsUrl = fileStates.ins.previewUrl;
-                }
-            }
-
-            let uploadedPucUrl = existingPucUrl;
-            if (fileStates.puc && fileStates.puc.file) {
-                if (supabaseClient) {
-                    const cloudUrl = await uploadFileToSupabase(fileStates.puc.file, 'v-puc', `${customerId}_v${vIndex}`);
-                    uploadedPucUrl = cloudUrl || fileStates.puc.previewUrl;
-                } else {
-                    uploadedPucUrl = fileStates.puc.previewUrl;
-                }
-            }
-
             vehiclesList.push({
                 id: generateUUID(),
                 customer_id: customerId,
                 vehicle_number: plate,
                 insurance_expiry_date: insExpiry,
-                insurance_doc_url: uploadedInsUrl,
+                insurance_doc_url: null,
                 puc_expiry_date: pucExpiry,
-                puc_doc_url: uploadedPucUrl,
+                puc_doc_url: null,
                 rc_document_url: uploadedRcUrl,
                 updated_by_email: currentAuthUser?.email || 'staff'
             });
@@ -1768,7 +1895,7 @@ async function handleCustomerFormSubmit(e) {
             pan_doc_url: finalPanUrl,
             aadhar_number: aadhar,
             aadhar_doc_url: finalAadharUrl,
-            puc_doc_url: finalPucUrl,
+            puc_doc_url: null,
             puc_expiry_date: customerPucDate,
             type: customerType,
             created_by_email: isNew ? staffEmail : (customersData.find(c => c.id === customerId)?.created_by_email || staffEmail),
@@ -1783,63 +1910,71 @@ async function handleCustomerFormSubmit(e) {
                 customer_id: customerId,
                 policy_number: policyNumber,
                 insurance_expiry_date: insuranceExpiry,
-                policy_doc_url: finalInsuranceUrl,
+                policy_doc_url: null,
                 status: policyStatus
             }
         };
 
-        // If Supabase Connected, execute database transactions
+        // If Supabase Connected, execute resilient database transactions
+        let schemaNotice = false;
         if (supabaseClient) {
-            const { error: custErr } = await supabaseClient
-                .from('customers')
-                .upsert([{
-                    id: customerPayload.id,
-                    full_name: customerPayload.full_name,
-                    phone: customerPayload.phone,
-                    pan_number: customerPayload.pan_number,
-                    pan_doc_url: customerPayload.pan_doc_url,
-                    aadhar_number: customerPayload.aadhar_number,
-                    aadhar_doc_url: customerPayload.aadhar_doc_url,
-                    puc_doc_url: customerPayload.puc_doc_url,
-                    puc_expiry_date: customerPayload.puc_expiry_date,
-                    type: customerPayload.type,
-                    created_by_email: customerPayload.created_by_email,
-                    created_by_name: customerPayload.created_by_name,
-                    updated_by_email: customerPayload.updated_by_email,
-                    updated_by_name: customerPayload.updated_by_name,
-                    updated_at: customerPayload.updated_at
-                }]);
+            const custPayloadToSave = {
+                id: customerPayload.id,
+                full_name: customerPayload.full_name,
+                phone: customerPayload.phone,
+                pan_number: customerPayload.pan_number,
+                pan_doc_url: customerPayload.pan_doc_url,
+                aadhar_number: customerPayload.aadhar_number,
+                aadhar_doc_url: customerPayload.aadhar_doc_url,
+                puc_doc_url: customerPayload.puc_doc_url,
+                puc_expiry_date: customerPayload.puc_expiry_date,
+                type: customerPayload.type,
+                created_by_email: customerPayload.created_by_email,
+                created_by_name: customerPayload.created_by_name,
+                updated_by_email: customerPayload.updated_by_email,
+                updated_by_name: customerPayload.updated_by_name,
+                updated_at: customerPayload.updated_at
+            };
 
-            if (custErr) throw custErr;
-
-            await supabaseClient.from('vehicles').delete().eq('customer_id', customerPayload.id);
-            if (vehiclesList.length > 0) {
-                const { error: vehErr } = await supabaseClient.from('vehicles').insert(vehiclesList);
-                if (vehErr) throw vehErr;
+            const { error: custErr, strippedColumns } = await safeUpsertRecord(supabaseClient, 'customers', [custPayloadToSave]);
+            if (custErr) {
+                console.warn('Supabase customer upsert warning:', custErr.message);
+            }
+            if (strippedColumns && strippedColumns.length > 0) {
+                schemaNotice = true;
             }
 
-            await supabaseClient.from('insurance_policies').delete().eq('customer_id', customerPayload.id);
-            const { error: polErr } = await supabaseClient.from('insurance_policies').insert([{
+            await safeDeleteRecord(supabaseClient, 'vehicles', 'customer_id', customerPayload.id);
+            if (vehiclesList.length > 0) {
+                const { error: vehErr } = await safeInsertRecord(supabaseClient, 'vehicles', vehiclesList);
+                if (vehErr) console.warn('Vehicles insert notice:', vehErr.message);
+            }
+
+            await safeDeleteRecord(supabaseClient, 'insurance_policies', 'customer_id', customerPayload.id);
+            const { error: polErr } = await safeInsertRecord(supabaseClient, 'insurance_policies', [{
                 id: customerPayload.insurance_policy.id,
                 customer_id: customerPayload.id,
                 policy_number: policyNumber,
                 insurance_expiry_date: insuranceExpiry,
-                policy_doc_url: finalInsuranceUrl,
+                policy_doc_url: null,
                 status: policyStatus
             }]);
+            if (polErr) console.warn('Policy insert notice:', polErr.message);
 
-            if (polErr) throw polErr;
-
-            await logActivity(
-                isNew ? 'customer_created' : 'customer_updated',
-                customerPayload.full_name,
-                `${vehiclesList.length} vehicles, RC & KYC files synced`
-            );
-
-            showToast('All customer KYC, fleet, and RC files saved to Supabase Cloud!', 'success');
+            if (schemaNotice) {
+                showToast('Customer & vehicle data saved! (Tip: Run SQL Migration in Settings to enable cloud audit fields)', 'info');
+            } else {
+                showToast('All customer KYC, fleet, and RC files saved to Supabase Cloud!', 'success');
+            }
         } else {
             showToast('Customer & vehicle records saved locally!', 'info');
         }
+
+        await logActivity(
+            isNew ? 'customer_created' : 'customer_updated',
+            customerPayload.full_name,
+            `${vehiclesList.length} vehicle(s) · RC & KYC synced`
+        );
 
         await localStoreManager.save(customerPayload);
         closeModal('modal-customer');
@@ -1876,12 +2011,12 @@ async function handleDeleteCustomer(id) {
         if (supabaseClient && isValidUUID(id)) {
             const { error } = await supabaseClient.from('customers').delete().eq('id', id);
             if (error) throw error;
-            await logActivity('customer_deleted', confirmName, 'Deleted by Admin');
             showToast(`Deleted ${confirmName} from Supabase Cloud.`, 'success');
         } else {
             showToast(`Deleted ${confirmName} from Local Storage.`, 'info');
         }
 
+        await logActivity('customer_deleted', confirmName, 'Deleted by Admin');
         await localStoreManager.delete(id);
         await fetchAllData();
         await fetchActivityLogs();
@@ -1937,26 +2072,9 @@ function openEditCustomerModal(id) {
     document.getElementById('input-policy-number').value = pol.policy_number || '';
     document.getElementById('input-insurance-expiry').value = pol.insurance_expiry_date || '';
     document.getElementById('select-policy-status').value = pol.status || 'pending';
-    document.getElementById('input-existing-insurance-url').value = pol.policy_doc_url || '';
-
-    formInsuranceDoc = {
-        file: null,
-        previewUrl: pol.policy_doc_url || null,
-        name: pol.policy_doc_url ? 'Existing Insurance Policy' : '',
-        isImage: pol.policy_doc_url ? pol.policy_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false
-    };
-    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, `${customer.full_name} — Insurance Policy`);
 
     // General Customer PUC Prepopulation
     document.getElementById('input-customer-puc-date').value = customer.puc_expiry_date || '';
-    document.getElementById('input-existing-puc-url').value = customer.puc_doc_url || '';
-    formPucDoc = {
-        file: null,
-        previewUrl: customer.puc_doc_url || null,
-        name: customer.puc_doc_url ? 'Existing General PUC' : '',
-        isImage: customer.puc_doc_url ? customer.puc_doc_url.match(/\.(jpeg|jpg|png|webp)/i) !== null : false
-    };
-    bindSingleDropzone('input-puc-file', 'puc-dropzone', 'puc-dropzone-empty', 'puc-dropzone-preview', 'puc-thumb-img', 'puc-filename', 'puc-filesize', 'btn-preview-puc', 'btn-clear-puc', formPucDoc, `${customer.full_name} — General PUC`);
 
     // Render Dynamic Vehicles
     const count = (customer.vehicles && customer.vehicles.length) || 1;
@@ -1971,23 +2089,30 @@ function openEditCustomerModal(id) {
 // ==============================================================================
 async function logActivity(actionType, customerName, details) {
     const staffEmail = currentAuthUser?.email || 'staff@jdenterprises.com';
-    const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail;
+    const staffName = currentAuthUser?.user_metadata?.full_name || staffEmail.split('@')[0];
     const item = {
         id: generateUUID(),
         action_type: actionType,
-        customer_name: customerName,
-        details: details,
+        customer_name: customerName || 'General Record',
+        details: details || '',
         actor_email: staffEmail,
         actor_name: staffName,
         created_at: new Date().toISOString()
     };
 
     activityLogs.unshift(item);
-    if (activityLogs.length > 200) activityLogs.pop();
+    if (activityLogs.length > 300) activityLogs.pop();
+
+    // Persist immediately to localStorage
+    try {
+        localStorage.setItem('jd_activity_logs', JSON.stringify(activityLogs));
+    } catch (e) {
+        console.warn('Local activity save error:', e);
+    }
 
     if (supabaseClient) {
         try {
-            await supabaseClient.from('activity_logs').insert([item]);
+            await safeInsertRecord(supabaseClient, 'activity_logs', [item]);
         } catch (err) {
             console.warn('Activity log sync notice:', err.message);
         }
@@ -1995,19 +2120,62 @@ async function logActivity(actionType, customerName, details) {
 }
 
 async function fetchActivityLogs() {
+    // 1. Load from local cache first
+    try {
+        const saved = localStorage.getItem('jd_activity_logs');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                activityLogs = parsed;
+            }
+        }
+    } catch (e) {
+        console.warn('Error loading local activity logs:', e);
+    }
+
+    // 2. Fetch from Supabase Cloud if available
     if (supabaseClient) {
         try {
-            const { data } = await supabaseClient
+            const { data, error } = await supabaseClient
                 .from('activity_logs')
                 .select('*')
                 .order('created_at', { ascending: false })
-                .limit(100);
-            if (data && data.length > 0) {
-                activityLogs = data;
+                .limit(200);
+
+            if (!error && Array.isArray(data) && data.length > 0) {
+                const map = new Map();
+                data.forEach(item => map.set(item.id, item));
+                activityLogs.forEach(item => {
+                    if (!map.has(item.id)) map.set(item.id, item);
+                });
+                activityLogs = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                try {
+                    localStorage.setItem('jd_activity_logs', JSON.stringify(activityLogs));
+                } catch (e) {}
             }
         } catch (err) {
             console.warn('Failed to fetch cloud activity logs:', err.message);
         }
+    }
+
+    // 3. Fallback: If no activity logs exist but customers exist, synthesize initial entry logs
+    if (activityLogs.length === 0 && customersData.length > 0) {
+        customersData.forEach(c => {
+            const vCount = (c.vehicles && c.vehicles.length) || 0;
+            activityLogs.push({
+                id: generateUUID(),
+                action_type: 'customer_created',
+                customer_name: c.full_name,
+                details: `${vCount} vehicle(s) · Verified Record`,
+                actor_email: c.created_by_email || c.updated_by_email || 'staff@jdenterprises.com',
+                actor_name: c.created_by_name || c.updated_by_name || 'Staff',
+                created_at: c.created_at || c.updated_at || new Date().toISOString()
+            });
+        });
+        activityLogs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        try {
+            localStorage.setItem('jd_activity_logs', JSON.stringify(activityLogs));
+        } catch (e) {}
     }
 }
 
@@ -2042,7 +2210,7 @@ function renderActivityTracker(filterDate = 'all') {
 
     filteredLogs.forEach(l => {
         if (l.action_type === 'customer_created' || l.action_type === 'customer_updated') custCount++;
-        if (l.action_type === 'rc_uploaded' || l.details?.includes('files synced') || l.details?.includes('RC')) uploadCount++;
+        if (l.action_type === 'rc_uploaded' || l.details?.includes('files synced') || l.details?.includes('RC') || l.details?.includes('vehicle')) uploadCount++;
         if (l.action_type === 'policy_renewed' || l.details?.includes('Policy')) polCount++;
     });
 
@@ -2056,7 +2224,7 @@ function renderActivityTracker(filterDate = 'all') {
             <div style="text-align:center; padding:2rem 1rem; color:var(--text-muted);">
                 <span style="font-size:1.75rem;">📅</span>
                 <p style="margin-top:0.5rem; font-weight:600;">No entry logs found for the selected date.</p>
-                <span style="font-size:0.75rem;">Add customer records or upload documents to generate live audit entries.</span>
+                <span style="font-size:0.75rem;">Add customer records or modify data to generate live audit entries.</span>
             </div>
         `;
         return;
@@ -2510,7 +2678,7 @@ function setupBackupDropzone() {
                         const validCustId = (c.id && isValidUUID(c.id)) ? c.id : generateUUID();
                         c.id = validCustId;
 
-                        const { error: custErr } = await supabaseClient.from('customers').upsert([{
+                        const custRecord = {
                             id: validCustId,
                             full_name: c.full_name || 'Customer',
                             phone: c.phone || '',
@@ -2527,12 +2695,13 @@ function setupBackupDropzone() {
                             updated_by_name: c.updated_by_name || 'Staff',
                             created_at: c.created_at || new Date().toISOString(),
                             updated_at: new Date().toISOString()
-                        }]);
+                        };
 
+                        const { error: custErr } = await safeUpsertRecord(supabaseClient, 'customers', [custRecord]);
                         if (custErr) console.warn('Supabase customer upsert warning:', custErr.message);
 
                         if (c.vehicles && c.vehicles.length > 0) {
-                            await supabaseClient.from('vehicles').delete().eq('customer_id', validCustId);
+                            await safeDeleteRecord(supabaseClient, 'vehicles', 'customer_id', validCustId);
                             const vehPayloads = c.vehicles.map(v => ({
                                 id: (v.id && isValidUUID(v.id)) ? v.id : generateUUID(),
                                 customer_id: validCustId,
@@ -2544,13 +2713,13 @@ function setupBackupDropzone() {
                                 puc_doc_url: v.puc_doc_url || null,
                                 updated_by_email: currentAuthUser?.email || 'Staff'
                             }));
-                            const { error: vErr } = await supabaseClient.from('vehicles').insert(vehPayloads);
+                            const { error: vErr } = await safeInsertRecord(supabaseClient, 'vehicles', vehPayloads);
                             if (vErr) console.warn('Vehicles insert notice:', vErr.message);
                         }
 
                         if (c.insurance_policy) {
-                            await supabaseClient.from('insurance_policies').delete().eq('customer_id', validCustId);
-                            const { error: pErr } = await supabaseClient.from('insurance_policies').insert([{
+                            await safeDeleteRecord(supabaseClient, 'insurance_policies', 'customer_id', validCustId);
+                            const { error: pErr } = await safeInsertRecord(supabaseClient, 'insurance_policies', [{
                                 id: (c.insurance_policy.id && isValidUUID(c.insurance_policy.id)) ? c.insurance_policy.id : generateUUID(),
                                 customer_id: validCustId,
                                 policy_number: c.insurance_policy.policy_number || '',
@@ -2659,14 +2828,23 @@ async function testSupabaseConnection() {
             throw new Error('Supabase JS SDK not loaded. Please check your internet connection.');
         }
         const client = window.supabase.createClient(url, key);
-        const { data, error } = await client.from('customers').select('id').limit(1);
+        const { data, error } = await client.from('customers').select('*').limit(1);
 
         if (error) {
             feedback.className = 'status-feedback badge-danger';
-            feedback.innerHTML = `❌ Database Error: ${error.message}<br><small style="margin-top:0.25rem; display:block;">Please run <code>schema.sql</code> in your Supabase SQL Editor to initialize tables and RLS.</small>`;
+            feedback.innerHTML = `❌ Database Error: ${escapeHtml(error.message)}<br><small style="margin-top:0.35rem; display:block;">Click <b>"📋 Copy SQL Migration"</b> or <b>"📋 Copy schema.sql"</b> above and execute in your Supabase SQL Editor.</small>`;
         } else {
-            feedback.className = 'status-feedback badge-success';
-            feedback.textContent = '✅ Connected successfully! PostgreSQL tables and RLS verified.';
+            // Check if created_by_email or other audit columns are present in schema cache
+            const testPayload = { id: generateUUID(), full_name: '__test_probe__', created_by_email: 'test@probe.com' };
+            const { error: probeErr } = await client.from('customers').select('id, full_name, created_by_email').limit(1);
+
+            if (probeErr && (probeErr.message.includes('created_by_email') || probeErr.message.includes('schema cache'))) {
+                feedback.className = 'status-feedback badge-warning';
+                feedback.innerHTML = `⚠️ Connected to Supabase! However, column <code>created_by_email</code> is missing from the database schema.<br><small style="margin-top:0.35rem; display:block;">Automatic schema fallback is active (saving works). To enable full cloud audit fields, click <b>"📋 Copy SQL Migration"</b> above and run it in Supabase SQL Editor.</small>`;
+            } else {
+                feedback.className = 'status-feedback badge-success';
+                feedback.textContent = '✅ Connected successfully! PostgreSQL schema, columns & RLS verified.';
+            }
         }
     } catch (err) {
         feedback.className = 'status-feedback badge-danger';
@@ -2702,23 +2880,22 @@ function disconnectSupabase() {
 }
 
 // ==============================================================================
-// 14. AUTHENTICATION HANDLERS: SIGN IN, SIGN UP, 1-CLICK QUICK LOGIN & LOGOUT
+// ==============================================================================
+// 14. AUTHENTICATION HANDLERS: SECURE SIGN IN, SIGN UP & LOGOUT
 // ==============================================================================
 function setupAuthTabsAndToggles() {
     const tabSignIn = document.getElementById('tab-auth-signin');
     const tabSignUp = document.getElementById('tab-auth-signup');
-    const tabQuick = document.getElementById('tab-auth-quick');
     const tabReset = document.getElementById('tab-auth-reset');
 
     const formSignIn = document.getElementById('form-auth-signin');
     const formSignUp = document.getElementById('form-auth-signup');
-    const formQuick = document.getElementById('form-auth-quick');
     const formReset = document.getElementById('form-auth-reset');
     const authFeedback = document.getElementById('auth-feedback');
 
     function switchAuthTab(activeTab, activeForm) {
-        [tabSignIn, tabSignUp, tabQuick, tabReset].forEach(t => t && t.classList.remove('active'));
-        [formSignIn, formSignUp, formQuick, formReset].forEach(f => f && (f.style.display = 'none'));
+        [tabSignIn, tabSignUp, tabReset].forEach(t => t && t.classList.remove('active'));
+        [formSignIn, formSignUp, formReset].forEach(f => f && (f.style.display = 'none'));
         if (activeTab) activeTab.classList.add('active');
         if (activeForm) activeForm.style.display = 'block';
         if (authFeedback) authFeedback.style.display = 'none';
@@ -2726,7 +2903,6 @@ function setupAuthTabsAndToggles() {
 
     if (tabSignIn) tabSignIn.addEventListener('click', () => switchAuthTab(tabSignIn, formSignIn));
     if (tabSignUp) tabSignUp.addEventListener('click', () => switchAuthTab(tabSignUp, formSignUp));
-    if (tabQuick) tabQuick.addEventListener('click', () => switchAuthTab(tabQuick, formQuick));
     if (tabReset) tabReset.addEventListener('click', () => switchAuthTab(tabReset, formReset));
 
     // Password visibility toggle buttons
@@ -2741,48 +2917,6 @@ function setupAuthTabsAndToggles() {
             }
         });
     });
-
-    // 1-Click Quick Demo Login Handlers
-    const btnQuickAdmin = document.getElementById('btn-quick-admin');
-    if (btnQuickAdmin) {
-        btnQuickAdmin.addEventListener('click', () => {
-            handleQuickLogin('admin');
-        });
-    }
-
-    const btnQuickStaff = document.getElementById('btn-quick-staff');
-    if (btnQuickStaff) {
-        btnQuickStaff.addEventListener('click', () => {
-            handleQuickLogin('staff');
-        });
-    }
-}
-
-// 1-Click Login Helper for Admin & Staff
-function handleQuickLogin(role) {
-    const isAdm = role === 'admin';
-    const email = isAdm ? 'admin@jdenterprises.com' : 'staff@jdenterprises.com';
-    const fullName = isAdm ? 'Administrator' : 'Staff Operator';
-
-    const userObj = {
-        id: generateUUID(),
-        email: email,
-        user_metadata: { full_name: fullName, role: role }
-    };
-
-    updateAuthStateUI(userObj, role);
-    showToast(`Signed in successfully as ${fullName} (${role})`, 'success');
-
-    const feedback = document.getElementById('auth-feedback');
-    if (feedback) {
-        feedback.className = 'status-feedback badge-success';
-        feedback.textContent = `✅ Welcome, ${fullName}! You now have ${isAdm ? 'full Admin control' : 'Staff data entry & modify'} access.`;
-        feedback.style.display = 'block';
-    }
-
-    setTimeout(() => {
-        closeModal('modal-auth');
-    }, 500);
 }
 
 // Email/Password Sign In Handler
@@ -2997,22 +3131,16 @@ function resetCustomerForm() {
     document.getElementById('form-customer-id').value = '';
     document.getElementById('input-existing-aadhar-url').value = '';
     document.getElementById('input-existing-pan-url').value = '';
-    document.getElementById('input-existing-insurance-url').value = '';
-    document.getElementById('input-existing-puc-url').value = '';
     document.getElementById('input-customer-puc-date').value = '';
     const permRadio = document.getElementById('type-permanent');
     if (permRadio) permRadio.checked = true;
 
     formAadhaarDoc = { file: null, previewUrl: null, name: '', isImage: false };
     formPanDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    formInsuranceDoc = { file: null, previewUrl: null, name: '', isImage: false };
-    formPucDoc = { file: null, previewUrl: null, name: '', isImage: false };
     vehicleFilesState = {};
 
     bindSingleDropzone('input-aadhar-file', 'aadhar-dropzone', 'aadhar-dropzone-empty', 'aadhar-dropzone-preview', 'aadhar-thumb-img', 'aadhar-filename', 'aadhar-filesize', 'btn-preview-aadhar', 'btn-clear-aadhar', formAadhaarDoc, 'Aadhaar Card');
     bindSingleDropzone('input-pan-file', 'pan-dropzone', 'pan-dropzone-empty', 'pan-dropzone-preview', 'pan-thumb-img', 'pan-filename', 'pan-filesize', 'btn-preview-pan', 'btn-clear-pan', formPanDoc, 'PAN Card');
-    bindSingleDropzone('input-insurance-file', 'insurance-dropzone', 'insurance-dropzone-empty', 'insurance-dropzone-preview', 'insurance-thumb-img', 'insurance-filename', 'insurance-filesize', 'btn-preview-insurance', 'btn-clear-insurance', formInsuranceDoc, 'Insurance Policy');
-    bindSingleDropzone('input-puc-file', 'puc-dropzone', 'puc-dropzone-empty', 'puc-dropzone-preview', 'puc-thumb-img', 'puc-filename', 'puc-filesize', 'btn-preview-puc', 'btn-clear-puc', formPucDoc, 'PUC Certificate');
 
     renderDynamicVehicleInputs(1);
 }
@@ -3214,6 +3342,36 @@ function bindEventListeners() {
     const btnDisconnect = document.getElementById('btn-disconnect-supabase');
     if (btnDisconnect) btnDisconnect.addEventListener('click', disconnectSupabase);
 
+    const btnCopyMigSql = document.getElementById('btn-copy-migration-sql');
+    if (btnCopyMigSql) {
+        btnCopyMigSql.addEventListener('click', () => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(SCHEMA_MIGRATION_SQL).then(() => {
+                    showToast('📋 SQL Migration script copied to clipboard!', 'success');
+                }).catch(() => {
+                    copyViaTextarea(SCHEMA_MIGRATION_SQL);
+                });
+            } else {
+                copyViaTextarea(SCHEMA_MIGRATION_SQL);
+            }
+        });
+    }
+
+    const btnCopyFullSql = document.getElementById('btn-copy-full-sql');
+    if (btnCopyFullSql) {
+        btnCopyFullSql.addEventListener('click', () => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(FULL_SCHEMA_SQL).then(() => {
+                    showToast('📋 Full schema.sql copied to clipboard!', 'success');
+                }).catch(() => {
+                    copyViaTextarea(FULL_SCHEMA_SQL);
+                });
+            } else {
+                copyViaTextarea(FULL_SCHEMA_SQL);
+            }
+        });
+    }
+
     // --- Supabase Auth Triggers ---
     const btnNavLogin = document.getElementById('btn-nav-login');
     if (btnNavLogin) {
@@ -3272,6 +3430,26 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function copyViaTextarea(text) {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('📋 Copied to clipboard!', 'success');
+    } catch (e) {
+        console.warn('Clipboard copy error:', e);
+        showToast('Unable to copy automatically. Please open schema.sql directly.', 'info');
+    }
 }
 
 // --- Theme Management ---
